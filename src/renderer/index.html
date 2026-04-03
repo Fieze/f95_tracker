@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>F95 Thread Tracker</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main class="content">
+        <header class="topbar panel">
+          <div class="topbar-title">
+            <p class="eyebrow">Dashboard</p>
+            <h2>Tracked Games</h2>
+          </div>
+          <div class="topbar-stats" aria-label="Overview counters">
+            <article class="topbar-stat">
+              <span>Games</span>
+              <strong id="stat-games">0</strong>
+            </article>
+            <article class="topbar-stat">
+              <span>Pending Updates</span>
+              <strong id="stat-updates">0</strong>
+            </article>
+            <article class="topbar-stat">
+              <span>Open Archives</span>
+              <strong id="stat-jobs">0</strong>
+            </article>
+          </div>
+          <div class="topbar-actions">
+            <button id="refresh-all" class="secondary" type="button">Refresh All</button>
+            <button id="open-add-thread-panel" class="icon-button" type="button" aria-label="Add thread" title="Add Thread">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            <button id="open-login-panel" class="icon-button" type="button" aria-label="Login" title="Login">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M10 7L15 12L10 17" />
+                <path d="M4 12h11" />
+                <path d="M20 5v14" />
+              </svg>
+            </button>
+            <button id="open-settings-panel" class="icon-button" type="button" aria-label="Settings" title="Settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3.5l2 1.1 2.3-.3 1 2.1 2 1.2-.6 2.2.6 2.2-2 1.2-1 2.1-2.3-.3-2 1.1-2-1.1-2.3.3-1-2.1-2-1.2.6-2.2-.6-2.2 2-1.2 1-2.1 2.3.3z" />
+                <path d="M12 9a3 3 0 1 1 0 6a3 3 0 0 1 0-6z" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="panel section-panel">
+          <div class="section-heading">
+            <h3>Games</h3>
+          </div>
+          <div id="games-list" class="games-list empty-state">No threads added yet.</div>
+        </section>
+
+        <section class="panel section-panel">
+          <div class="section-heading">
+            <h3>Archive Queue</h3>
+          </div>
+          <div id="extraction-status" class="extraction-status hidden"></div>
+          <div id="jobs-list" class="jobs-list empty-state">No archives detected yet.</div>
+        </section>
+      </main>
+    </div>
+
+    <div id="overlay-backdrop" class="overlay-backdrop hidden"></div>
+
+    <section id="settings-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="settings-panel-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow">System</p>
+          <h3 id="settings-panel-title">Settings</h3>
+        </div>
+        <button class="overlay-close" type="button" data-close-overlay aria-label="Close settings">Close</button>
+      </div>
+      <div class="overlay-panel-status-row">
+        <span id="settings-status" class="status-chip muted">ready</span>
+      </div>
+      <form id="settings-form" class="overlay-form">
+        <label>
+          Watch Folder
+          <div class="path-input-row">
+            <input name="watchFolder" type="text" placeholder="C:\Downloads\F95" />
+            <button class="secondary browse-folder-button" type="button" data-target-input="watchFolder">
+              Browse
+            </button>
+          </div>
+        </label>
+        <label>
+          Install Root
+          <div class="path-input-row">
+            <input name="installRoot" type="text" placeholder="D:\Games\F95" />
+            <button class="secondary browse-folder-button" type="button" data-target-input="installRoot">
+              Browse
+            </button>
+          </div>
+        </label>
+        <label>
+          Sync Interval (Minutes)
+          <input name="syncIntervalMinutes" type="number" min="5" step="5" />
+        </label>
+        <button class="primary" type="submit">Save</button>
+      </form>
+    </section>
+
+    <section id="login-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="login-panel-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow">Account</p>
+          <h3 id="login-panel-title">f95zone Login</h3>
+        </div>
+        <button class="overlay-close" type="button" data-close-overlay aria-label="Close login">Close</button>
+      </div>
+      <div class="auth-box overlay-panel-body">
+        <p id="auth-status" class="auth-status">Not logged in</p>
+        <p id="auth-check-result" class="auth-check-result"></p>
+        <div class="auth-actions">
+          <button id="open-login" class="secondary" type="button">Open Login Window</button>
+          <button id="logout" class="secondary" type="button">Log Out</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="add-thread-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="add-thread-panel-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow">Import</p>
+          <h3 id="add-thread-panel-title">Add Thread</h3>
+        </div>
+        <button class="overlay-close" type="button" data-close-overlay aria-label="Close add thread">Close</button>
+      </div>
+      <form id="add-thread-form" class="overlay-form">
+        <label>
+          Thread URL
+          <input name="threadUrl" type="url" placeholder="https://f95zone.to/threads/..." required />
+        </label>
+        <button class="primary" type="submit">Import Thread</button>
+      </form>
+    </section>
+
+    <template id="game-card-template">
+      <article class="game-tile">
+        <button class="game-tile-button" type="button">
+          <span class="game-tile-badges">
+            <span class="game-update-badge hidden">Update available</span>
+            <span class="game-thread-status-badge hidden"></span>
+          </span>
+          <span class="game-tile-media">
+            <img class="game-tile-banner" alt="" />
+            <span class="game-tile-fallback"></span>
+          </span>
+          <span class="game-tile-meta">
+            <span class="game-tile-title"></span>
+          </span>
+        </button>
+      </article>
+    </template>
+
+    <template id="game-details-template">
+      <article class="game-card">
+        <div class="game-card-header">
+          <div>
+            <h4 class="game-title"></h4>
+          </div>
+          <span class="status-chip game-status"></span>
+        </div>
+        <div class="primary-info-grid">
+          <div>
+            <span>Engine</span>
+            <strong class="engine-value"></strong>
+          </div>
+          <div>
+            <span>Version</span>
+            <strong class="current-version"></strong>
+          </div>
+          <div>
+            <span>Release Date</span>
+            <strong class="release-date"></strong>
+          </div>
+          <div>
+            <span>Developer</span>
+            <strong class="developer-value"></strong>
+          </div>
+        </div>
+        <div class="version-grid">
+          <div>
+            <span>Last Sync</span>
+            <strong class="last-sync"></strong>
+          </div>
+        </div>
+        <div class="content-block">
+          <h5 class="content-heading">Installations</h5>
+          <div class="install-folders"></div>
+        </div>
+        <div class="content-block">
+          <h5 class="content-heading">Overview</h5>
+          <p class="overview"></p>
+        </div>
+        <div class="content-block">
+          <h5 class="content-heading">Genre</h5>
+          <div class="tags"></div>
+        </div>
+        <div class="content-block">
+          <h5 class="content-heading">Screenshots</h5>
+          <div class="screenshots"></div>
+        </div>
+        <div class="warnings"></div>
+        <div class="download-groups"></div>
+        <details class="debug-panel">
+          <summary>Debug</summary>
+          <pre class="debug-output"></pre>
+        </details>
+        <div class="actions">
+          <button class="secondary refresh-button" type="button">Refresh</button>
+          <button class="secondary delete-button" type="button">Delete</button>
+          <a class="thread-link" target="_blank" rel="noreferrer">Open Thread</a>
+        </div>
+      </article>
+    </template>
+
+    <template id="job-card-template">
+      <article class="job-card">
+        <div class="job-header">
+          <div>
+            <h4 class="job-title"></h4>
+            <p class="job-path"></p>
+          </div>
+          <span class="status-chip job-status"></span>
+        </div>
+        <p class="job-details"></p>
+        <div class="job-assign">
+          <label class="job-select-label">
+            Assigned Game
+            <select class="job-game-select"></select>
+          </label>
+        </div>
+        <div class="job-actions"></div>
+      </article>
+    </template>
+
+    <div id="image-lightbox" class="image-lightbox hidden">
+      <button id="lightbox-close" class="lightbox-close" type="button">Close</button>
+      <img id="lightbox-image" class="lightbox-image" alt="" />
+    </div>
+
+    <script src="./renderer-app.js"></script>
+  </body>
+</html>

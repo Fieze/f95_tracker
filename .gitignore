@@ -1,0 +1,30 @@
+node_modules/
+
+# Local app/runtime data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.log
+logs/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+release/
+out/
+coverage/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local helper files
+temp_paths.js

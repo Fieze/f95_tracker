@@ -1,0 +1,37 @@
+{
+  "name": "f95_tracker",
+  "version": "1.0.0",
+  "description": "Windows desktop tracker for F95Zone game threads and local archives.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node scripts/sync-7zip.js",
+    "test": "node test/run.js"
+  },
+  "keywords": [
+    "electron",
+    "f95zone",
+    "desktop"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "7zip-bin": "^5.2.0",
+    "cheerio": "^1.2.0",
+    "chokidar": "^5.0.0",
+    "electron": "^41.1.1",
+    "sql.js": "^1.14.1"
+  },
+  "build": {
+    "extraResources": [
+      {
+        "from": "resources/tools",
+        "to": "tools",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  }
+}
