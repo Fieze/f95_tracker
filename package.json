@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "postinstall": "node scripts/sync-7zip.js",
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "build": "electron-builder --win portable"
   },
   "keywords": [
     "electron",
@@ -20,11 +21,26 @@
     "7zip-bin": "^5.2.0",
     "cheerio": "^1.2.0",
     "chokidar": "^5.0.0",
-    "electron": "^41.1.1",
     "sql.js": "^1.14.1"
   },
+  "devDependencies": {
+    "electron": "^41.1.1",
+    "electron-builder": "^26.0.12"
+  },
   "build": {
+    "appId": "com.f95tracker.app",
+    "productName": "F95 Tracker",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
     "extraResources": [
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
       {
         "from": "resources/tools",
         "to": "tools",
@@ -32,6 +48,21 @@
           "**/*"
         ]
       }
-    ]
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+    }
   }
 }

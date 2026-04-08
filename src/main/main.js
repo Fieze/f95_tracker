@@ -6,6 +6,9 @@ let mainWindow;
 let loginWindow;
 let appService;
 const AUTH_PARTITION = "persist:f95-auth";
+const appIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, "icon.ico")
+  : path.join(__dirname, "..", "..", "resources", "icon.ico");
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -13,6 +16,7 @@ async function createWindow() {
     height: 920,
     minWidth: 1120,
     minHeight: 720,
+    icon: appIconPath,
     backgroundColor: "#16211e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -42,6 +46,7 @@ async function createLoginWindow() {
     parent: mainWindow || undefined,
     modal: false,
     autoHideMenuBar: true,
+    icon: appIconPath,
     backgroundColor: "#16211e",
     webPreferences: {
       partition: AUTH_PARTITION,
