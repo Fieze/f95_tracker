@@ -111,6 +111,10 @@ function setSettingsForm(settings) {
 function renderAuth() {
   const statusNode = $("#auth-status");
   const resultNode = $("#auth-check-result");
+  const loginBtn = $("#open-login-panel");
+  if (loginBtn) {
+    loginBtn.dataset.authState = state.auth.loggedIn ? "logged-in" : "logged-out";
+  }
   if (!statusNode) return;
 
   if (state.auth.loggedIn) {

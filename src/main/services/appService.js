@@ -12,12 +12,13 @@ const {
   buildInstallDirectory,
   buildSuggestedInstallPath,
   buildVersionedInstallDirectory,
-  compareVersions,
   isExpectedGameInstallPath,
   normalizeThreadUrl,
   sanitizePathSegment,
   sanitizeVersion
 } = require("./utils");
+
+const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged }) {
@@ -27,6 +28,8 @@ class AppService {
     this.assetCachePath = path.join(userDataPath, "thread-assets");
     this.currentExtraction = null;
     this.activeExtractionHandle = null;
+    this.folderSyncTimer = null;
+    this.folderSyncInFlight = false;
     this.db = new DatabaseService(userDataPath);
     this.fetcher = new ThreadFetcher(authSession);
     this.folderWatcher = new FolderWatcher({
@@ -44,6 +47,8 @@ class AppService {
     await fs.mkdir(this.assetCachePath, { recursive: true });
     const settings = this.db.getSettings();
     await this.applyRuntimeSettings(settings);
+    await this.ensureAllGameRoots();
+    await this.pollManagedFolders({ emitOnChange: false });
   }
 
   async bootstrap() {
@@ -68,7 +73,8 @@ class AppService {
       syncIntervalMinutes: payload.syncIntervalMinutes
     });
     await this.applyRuntimeSettings(settings);
-    await this.syncAllManagedFolders();
+    await this.ensureAllGameRoots();
+    await this.pollManagedFolders({ emitOnChange: false });
     this.emitChange();
     return this.getState();
   }
@@ -252,6 +258,7 @@ class AppService {
   async applyRuntimeSettings(settings) {
     await this.folderWatcher.start(settings.watchFolder);
     this.scheduler.start(settings.syncIntervalMinutes);
+    this.startManagedFolderMonitor();
   }
 
   async addThread(threadUrl) {
@@ -606,6 +613,7 @@ class AppService {
       this.activeExtractionHandle = null;
     }
     this.scheduler.stop();
+    this.stopManagedFolderMonitor();
     await this.folderWatcher.stop();
     if (this.currentExtraction?.jobId) {
       await this.db.updateArchiveJob(this.currentExtraction.jobId, {
@@ -619,24 +627,26 @@ class AppService {
   async syncAllManagedFolders() {
     const settings = this.db.getSettings();
     if (!settings.installRoot) {
-      return;
+      return false;
     }
 
+    let changed = false;
     const games = this.db.getGames();
     for (const game of games) {
-      await this.syncGameFolders(game.id, { game });
+      changed = (await this.syncGameFolders(game.id, { game })) || changed;
     }
+    return changed;
   }
 
   async syncGameFolders(gameId, options = {}) {
     const game = options.game || this.db.getGameById(Number(gameId));
     if (!game) {
-      return [];
+      return false;
     }
 
     const settings = this.db.getSettings();
     if (!settings.installRoot) {
-      return this.db.listGameFolders(game.id);
+      return false;
     }
 
     const gameRoot = options.rootOverride || buildInstallDirectory(settings.installRoot, game.title);
@@ -665,11 +675,32 @@ class AppService {
       };
     });
 
+    const beforeFolders = existingFolders.map((folder) => ({
+      folderPath: path.resolve(folder.folderPath),
+      folderName: folder.folderName,
+      version: folder.version,
+      versionSource: folder.versionSource
+    }));
+    const beforeGame = this.db.getGameById(game.id);
+
     await this.db.replaceGameFolders(game.id, nextFolders);
-    await this.db.applyDerivedInstallState(game.id, this.db.listGameFolders(game.id), {
+    const syncedFolders = this.db.listGameFolders(game.id);
+    const updatedGame = await this.db.applyDerivedInstallState(game.id, syncedFolders, {
       installPath: nextFolders[0]?.folderPath || null
     });
-    return this.db.listGameFolders(game.id);
+
+    const afterFolders = syncedFolders.map((folder) => ({
+      folderPath: path.resolve(folder.folderPath),
+      folderName: folder.folderName,
+      version: folder.version,
+      versionSource: folder.versionSource
+    }));
+
+    return (
+      JSON.stringify(beforeFolders) !== JSON.stringify(afterFolders) ||
+      (beforeGame?.installedVersion || null) !== (updatedGame?.installedVersion || null) ||
+      (beforeGame?.installPath || null) !== (updatedGame?.installPath || null)
+    );
   }
 
   async ensureGameRootForGame(game) {
@@ -681,6 +712,50 @@ class AppService {
     const gameRoot = buildInstallDirectory(settings.installRoot, game.title);
     await fs.mkdir(gameRoot, { recursive: true });
     return gameRoot;
+  }
+
+  async ensureAllGameRoots() {
+    const settings = this.db.getSettings();
+    if (!settings.installRoot) {
+      return;
+    }
+
+    const games = this.db.getGames();
+    for (const game of games) {
+      await this.ensureGameRootForGame(game);
+    }
+  }
+
+  startManagedFolderMonitor() {
+    this.stopManagedFolderMonitor();
+    this.folderSyncTimer = setInterval(() => {
+      this.pollManagedFolders().catch(() => {});
+    }, MANAGED_FOLDER_POLL_INTERVAL_MS);
+  }
+
+  stopManagedFolderMonitor() {
+    if (this.folderSyncTimer) {
+      clearInterval(this.folderSyncTimer);
+      this.folderSyncTimer = null;
+    }
+  }
+
+  async pollManagedFolders({ emitOnChange = true } = {}) {
+    if (this.folderSyncInFlight) {
+      return false;
+    }
+
+    this.folderSyncInFlight = true;
+    try {
+      await this.ensureAllGameRoots();
+      const changed = await this.syncAllManagedFolders();
+      if (changed && emitOnChange) {
+        this.emitChange();
+      }
+      return changed;
+    } finally {
+      this.folderSyncInFlight = false;
+    }
   }
 
   async listDirectSubdirectories(rootPath) {
