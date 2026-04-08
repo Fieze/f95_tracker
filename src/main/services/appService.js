@@ -20,6 +20,8 @@ const {
 
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const EXTRACTION_PROGRESS_EMIT_INTERVAL_MS = 250;
+const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
+const BACKUP_RETENTION_COUNT = 3;
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged }) {
@@ -27,9 +29,11 @@ class AppService {
     this.authSession = authSession;
     this.userDataPath = userDataPath;
     this.assetCachePath = path.join(userDataPath, "thread-assets");
+    this.backupPath = path.join(userDataPath, "backups");
     this.currentExtraction = null;
     this.activeExtractionHandle = null;
     this.folderSyncTimer = null;
+    this.backupTimer = null;
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
     this.lastExtractionProgressEmitAt = 0;
@@ -52,6 +56,8 @@ class AppService {
     await this.applyRuntimeSettings(settings);
     await this.ensureAllGameRoots();
     await this.pollManagedFolders({ emitOnChange: false });
+    await this.createBackup();
+    this.startBackupScheduler();
   }
 
   async bootstrap() {
@@ -75,6 +81,35 @@ class AppService {
       installRoot: payload.installRoot,
       syncIntervalMinutes: payload.syncIntervalMinutes
     });
+    await this.applyRuntimeSettings(settings);
+    await this.ensureAllGameRoots();
+    await this.pollManagedFolders({ emitOnChange: false });
+    this.emitChange();
+    return this.getState();
+  }
+
+  async exportDataToFile(filePath) {
+    const targetPath = path.resolve(String(filePath || ""));
+    if (!targetPath) {
+      throw new Error("Export path is required.");
+    }
+
+    const snapshot = this.db.exportSnapshot();
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, JSON.stringify(snapshot, null, 2), "utf8");
+    return { path: targetPath };
+  }
+
+  async importDataFromFile(filePath) {
+    const sourcePath = path.resolve(String(filePath || ""));
+    if (!sourcePath) {
+      throw new Error("Import path is required.");
+    }
+
+    const content = await fs.readFile(sourcePath, "utf8");
+    const snapshot = JSON.parse(content);
+    await this.db.importSnapshot(snapshot);
+    const settings = this.db.getSettings();
     await this.applyRuntimeSettings(settings);
     await this.ensureAllGameRoots();
     await this.pollManagedFolders({ emitOnChange: false });
@@ -625,6 +660,7 @@ class AppService {
     }
     this.scheduler.stop();
     this.stopManagedFolderMonitor();
+    this.stopBackupScheduler();
     await this.folderWatcher.stop();
     if (this.currentExtraction?.jobId) {
       await this.db.updateArchiveJob(this.currentExtraction.jobId, {
@@ -759,6 +795,55 @@ class AppService {
       clearInterval(this.folderSyncTimer);
       this.folderSyncTimer = null;
     }
+  }
+
+  startBackupScheduler() {
+    this.stopBackupScheduler();
+    this.backupTimer = setInterval(() => {
+      this.createBackup().catch(() => {});
+    }, BACKUP_INTERVAL_MS);
+  }
+
+  stopBackupScheduler() {
+    if (this.backupTimer) {
+      clearInterval(this.backupTimer);
+      this.backupTimer = null;
+    }
+  }
+
+  async createBackup() {
+    await fs.mkdir(this.backupPath, { recursive: true });
+    const snapshot = this.db.exportSnapshot();
+    const safeTimestamp = new Date()
+      .toISOString()
+      .replace(/:/g, "-")
+      .replace(/\./g, "-");
+    const filePath = path.join(this.backupPath, `backup-${safeTimestamp}.json`);
+    await fs.writeFile(filePath, JSON.stringify(snapshot, null, 2), "utf8");
+    await this.pruneBackups();
+    return filePath;
+  }
+
+  async pruneBackups() {
+    const entries = await fs.readdir(this.backupPath, { withFileTypes: true }).catch(() => []);
+    const files = await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && /^backup-.*\.json$/i.test(entry.name))
+        .map(async (entry) => {
+          const fullPath = path.join(this.backupPath, entry.name);
+          const stats = await fs.stat(fullPath);
+          return {
+            fullPath,
+            mtimeMs: stats.mtimeMs
+          };
+        })
+    );
+
+    const staleFiles = files
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .slice(BACKUP_RETENTION_COUNT);
+
+    await Promise.all(staleFiles.map((file) => fs.unlink(file.fullPath).catch(() => {})));
   }
 
   async pollManagedFolders({ emitOnChange = true } = {}) {

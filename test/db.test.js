@@ -121,3 +121,68 @@ test("replaceGameFolders preserves ids for unchanged folder paths", async (t) =>
 
   assert.equal(firstFolder.id, secondFolder.id);
 });
+
+test("exportSnapshot and importSnapshot round-trip settings and games", async (t) => {
+  const { db, tempDir } = await createDb();
+  t.after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  await db.saveSettings({
+    watchFolder: "C:\\Watch",
+    installRoot: "D:\\Games",
+    syncIntervalMinutes: 45
+  });
+  const game = await db.upsertGameFromThread({
+    sourceUrl: "https://f95zone.to/threads/backup-game.3/",
+    title: "Backup Game",
+    threadTitle: "Backup Game [v1.0]",
+    currentVersion: "1.0",
+    developer: "Dev",
+    engine: "Ren'Py",
+    threadStatus: "Ongoing",
+    overview: "Overview",
+    releaseDate: "2026-04-03",
+    changelog: "",
+    bannerImage: null,
+    screenshotImages: [],
+    tags: ["tag-a"],
+    downloadGroups: [
+      {
+        label: "Downloads",
+        links: [{ label: "Mega", url: "https://example.com/file" }]
+      }
+    ],
+    rawOpHtml: "",
+    rawOpText: "",
+    parserDebug: {},
+    warnings: []
+  });
+  await db.replaceGameFolders(game.id, [
+    {
+      folderName: "Backup Game-1.0",
+      folderPath: "D:\\Games\\Backup Game\\Backup Game-1.0",
+      version: "1.0",
+      versionSource: "inferred"
+    }
+  ]);
+
+  const snapshot = db.exportSnapshot();
+
+  const { db: importedDb, tempDir: importedTempDir } = await createDb();
+  t.after(async () => {
+    await fs.rm(importedTempDir, { recursive: true, force: true });
+  });
+
+  await importedDb.importSnapshot(snapshot);
+
+  const importedSettings = importedDb.getSettings();
+  const importedGames = importedDb.getGames();
+  assert.equal(importedSettings.watchFolder, "C:\\Watch");
+  assert.equal(importedSettings.installRoot, "D:\\Games");
+  assert.equal(importedSettings.syncIntervalMinutes, 45);
+  assert.equal(importedGames.length, 1);
+  assert.equal(importedGames[0].title, "Backup Game");
+  assert.equal(importedGames[0].downloadGroups[0].links[0].label, "Mega");
+  assert.equal(importedGames[0].folders[0].version, "1.0");
+});

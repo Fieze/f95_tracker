@@ -701,11 +701,45 @@ async function handleAddThread(event) {
   }
 }
 
+async function handleExportData() {
+  $("#settings-status").textContent = "exporting";
+  try {
+    const result = await window.f95App.exportData();
+    $("#settings-status").textContent = result?.canceled ? "ready" : "exported";
+  } catch (error) {
+    $("#settings-status").textContent = "error";
+    alert(error.message);
+  }
+}
+
+async function handleImportData() {
+  const confirmed = window.confirm("Importing replaces the current local app data. Continue?");
+  if (!confirmed) {
+    return;
+  }
+
+  $("#settings-status").textContent = "importing";
+  try {
+    const result = await window.f95App.importData();
+    if (result?.canceled) {
+      $("#settings-status").textContent = "ready";
+      return;
+    }
+    $("#settings-status").textContent = "imported";
+    await reloadState();
+  } catch (error) {
+    $("#settings-status").textContent = "error";
+    alert(error.message);
+  }
+}
+
 async function initialize() {
   $("#settings-form").addEventListener("submit", handleSettingsSubmit);
   document.querySelectorAll(".browse-folder-button").forEach((button) => {
     button.addEventListener("click", handleBrowseFolderClick);
   });
+  $("#export-data").addEventListener("click", handleExportData);
+  $("#import-data").addEventListener("click", handleImportData);
   $("#add-thread-form").addEventListener("submit", handleAddThread);
   $("#refresh-all").addEventListener("click", async () => {
     try {

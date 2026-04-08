@@ -430,6 +430,76 @@ class DatabaseService {
     await this.persist();
   }
 
+  exportSnapshot() {
+    return {
+      format: "f95-app-export",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      tables: {
+        settings: this.query("SELECT key, value FROM settings ORDER BY key"),
+        games: this.query("SELECT * FROM games ORDER BY id"),
+        download_links: this.query("SELECT * FROM download_links ORDER BY id"),
+        archive_jobs: this.query("SELECT * FROM archive_jobs ORDER BY id"),
+        sync_runs: this.query("SELECT * FROM sync_runs ORDER BY id"),
+        game_folders: this.query("SELECT * FROM game_folders ORDER BY id")
+      }
+    };
+  }
+
+  async importSnapshot(snapshot) {
+    if (!snapshot || snapshot.format !== "f95-app-export" || !snapshot.tables) {
+      throw new Error("Backup file format is invalid.");
+    }
+
+    const tableOrder = ["settings", "games", "download_links", "archive_jobs", "sync_runs", "game_folders"];
+    this.db.run("PRAGMA foreign_keys = OFF;");
+    try {
+      this.db.run("BEGIN TRANSACTION;");
+      this.db.run("DELETE FROM download_links");
+      this.db.run("DELETE FROM archive_jobs");
+      this.db.run("DELETE FROM sync_runs");
+      this.db.run("DELETE FROM game_folders");
+      this.db.run("DELETE FROM games");
+      this.db.run("DELETE FROM settings");
+
+      for (const tableName of tableOrder) {
+        this.insertRows(tableName, snapshot.tables[tableName] || []);
+      }
+
+      this.db.run("COMMIT;");
+    } catch (error) {
+      this.db.run("ROLLBACK;");
+      throw error;
+    } finally {
+      this.db.run("PRAGMA foreign_keys = ON;");
+    }
+
+    await this.persist();
+  }
+
+  insertRows(tableName, rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return;
+    }
+
+    const columns = this.query(`PRAGMA table_info(${tableName})`).map((column) => column.name);
+    const insertableColumns = columns.filter((column) => Object.prototype.hasOwnProperty.call(rows[0], column));
+    if (insertableColumns.length === 0) {
+      return;
+    }
+
+    const placeholders = insertableColumns.map(() => "?").join(", ");
+    const stmt = this.db.prepare(
+      `INSERT INTO ${tableName} (${insertableColumns.join(", ")}) VALUES (${placeholders})`
+    );
+
+    for (const row of rows) {
+      stmt.run(insertableColumns.map((column) => row[column] ?? null));
+    }
+
+    stmt.free();
+  }
+
   hydrateGame(row, links, folders) {
     const groups = [];
     for (const link of links) {

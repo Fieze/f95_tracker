@@ -282,6 +282,12 @@ form {
   padding-inline: 16px;
 }
 
+.settings-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 label {
   display: grid;
   gap: 6px;

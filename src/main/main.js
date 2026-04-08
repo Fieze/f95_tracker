@@ -73,6 +73,35 @@ async function createLoginWindow() {
 function bindIpc() {
   ipcMain.handle("app:bootstrap", async () => appService.bootstrap());
   ipcMain.handle("settings:update", async (_event, payload) => appService.updateSettings(payload));
+  ipcMain.handle("data:export", async () => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Export data",
+      defaultPath: path.join(app.getPath("documents"), "f95-app-export.json"),
+      filters: [{ name: "JSON", extensions: ["json"] }]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true, path: "" };
+    }
+
+    const exported = await appService.exportDataToFile(result.filePath);
+    return { canceled: false, path: exported.path };
+  });
+  ipcMain.handle("data:import", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Import data",
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }]
+    });
+
+    const filePath = result.filePaths?.[0] || "";
+    if (result.canceled || !filePath) {
+      return { canceled: true, path: "" };
+    }
+
+    await appService.importDataFromFile(filePath);
+    return { canceled: false, path: filePath };
+  });
   ipcMain.handle("folders:select", async (_event, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: payload?.title || "Select folder",
