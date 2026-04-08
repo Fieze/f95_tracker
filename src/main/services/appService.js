@@ -9,8 +9,8 @@ const { parseThread } = require("./parser");
 const { SyncScheduler } = require("./syncScheduler");
 const { ThreadFetcher } = require("./threadFetcher");
 const {
+  buildGameRootCandidates,
   buildInstallDirectory,
-  buildSuggestedInstallPath,
   buildVersionedInstallDirectory,
   isExpectedGameInstallPath,
   normalizeThreadUrl,
@@ -19,6 +19,7 @@ const {
 } = require("./utils");
 
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
+const EXTRACTION_PROGRESS_EMIT_INTERVAL_MS = 250;
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged }) {
@@ -30,6 +31,8 @@ class AppService {
     this.activeExtractionHandle = null;
     this.folderSyncTimer = null;
     this.folderSyncInFlight = false;
+    this.lastManagedFolderPollAt = 0;
+    this.lastExtractionProgressEmitAt = 0;
     this.db = new DatabaseService(userDataPath);
     this.fetcher = new ThreadFetcher(authSession);
     this.folderWatcher = new FolderWatcher({
@@ -56,7 +59,7 @@ class AppService {
   }
 
   async getState() {
-    await this.syncAllManagedFolders();
+    await this.refreshManagedFoldersIfStale();
     return {
       settings: this.db.getSettings(),
       auth: await this.getAuthState(),
@@ -484,6 +487,7 @@ class AppService {
       return;
     }
 
+    const now = Date.now();
     const elapsedMs = Date.now() - new Date(this.currentExtraction.startedAt).getTime();
     const processedFiles = Number(progress.processedFiles || 0);
     const totalFiles = Number(progress.totalFiles || 0);
@@ -499,7 +503,14 @@ class AppService {
       totalFiles,
       estimatedRemainingMs
     };
-    this.emitChange();
+    const shouldEmit =
+      processedFiles >= totalFiles ||
+      now - this.lastExtractionProgressEmitAt >= EXTRACTION_PROGRESS_EMIT_INTERVAL_MS;
+
+    if (shouldEmit) {
+      this.lastExtractionProgressEmitAt = now;
+      this.emitChange();
+    }
   }
 
   async hydrateThreadAssets(parsedThread) {
@@ -649,14 +660,21 @@ class AppService {
       return false;
     }
 
-    const gameRoot = options.rootOverride || buildInstallDirectory(settings.installRoot, game.title);
+    const rootCandidates = options.rootOverride
+      ? [path.resolve(options.rootOverride)]
+      : this.getManagedGameRootCandidates(game, settings.installRoot);
     const existingFolders = this.db.listGameFolders(game.id);
+    let gameRoot = rootCandidates[0] || buildInstallDirectory(settings.installRoot, game.title);
     let directSubdirectories = [];
 
-    try {
-      directSubdirectories = await this.listDirectSubdirectories(gameRoot);
-    } catch {
-      directSubdirectories = [];
+    for (const candidate of rootCandidates) {
+      try {
+        directSubdirectories = await this.listDirectSubdirectories(candidate);
+        gameRoot = candidate;
+        break;
+      } catch {
+        directSubdirectories = [];
+      }
     }
 
     const existingByPath = new Map(existingFolders.map((folder) => [path.resolve(folder.folderPath), folder]));
@@ -746,6 +764,7 @@ class AppService {
     }
 
     this.folderSyncInFlight = true;
+    this.lastManagedFolderPollAt = Date.now();
     try {
       await this.ensureAllGameRoots();
       const changed = await this.syncAllManagedFolders();
@@ -790,6 +809,32 @@ class AppService {
     }
 
     return path.dirname(installPath);
+  }
+
+  getManagedGameRootCandidates(game, installRoot) {
+    const candidates = buildGameRootCandidates(installRoot, game.title).map((entry) => path.resolve(entry));
+    const actualRoot = this.resolveGameRootPath(game, installRoot);
+    if (actualRoot) {
+      const resolvedRoot = path.resolve(actualRoot);
+      if (!candidates.includes(resolvedRoot)) {
+        candidates.unshift(resolvedRoot);
+      }
+    }
+    return candidates;
+  }
+
+  async refreshManagedFoldersIfStale() {
+    const settings = this.db.getSettings();
+    if (!settings.installRoot || this.folderSyncInFlight) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (now - this.lastManagedFolderPollAt < MANAGED_FOLDER_POLL_INTERVAL_MS) {
+      return false;
+    }
+
+    return this.pollManagedFolders({ emitOnChange: false });
   }
 }
 

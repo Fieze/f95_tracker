@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  buildGameRootCandidates,
   buildInstallDirectory,
   buildSuggestedInstallPath,
   buildVersionedInstallDirectory,
@@ -45,6 +46,13 @@ test("isExpectedGameInstallPath accepts the game root and nested managed folders
   const gameRoot = buildInstallDirectory("D:\\Games", "Away from Home");
   assert.equal(isExpectedGameInstallPath("D:\\Games", "Away from Home", `${gameRoot}\\Episode-1-29`), true);
   assert.equal(isExpectedGameInstallPath("D:\\Games", "Away from Home", gameRoot), true);
+});
+
+test("buildGameRootCandidates keeps both visible-title and legacy slug roots", () => {
+  assert.deepEqual(buildGameRootCandidates("D:\\Games", "Away from Home"), [
+    "D:\\Games\\Away from Home",
+    "D:\\Games\\away-from-home"
+  ]);
 });
 
 test("buildSuggestedInstallPath keeps a distinct folder name or falls back to title-version", () => {

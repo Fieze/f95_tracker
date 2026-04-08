@@ -23,6 +23,8 @@ const GAME_TILE_PREFERRED_WIDTH = 290;
 const GAME_TILE_BASE_WIDTH = 267;
 const GAME_TILE_GAP = 18;
 let gamesGridResizeObserver = null;
+let reloadStatePromise = null;
+let reloadStateQueued = false;
 
 function $(selector) {
   return document.querySelector(selector);
@@ -621,12 +623,28 @@ function render() {
 }
 
 async function reloadState() {
-  const nextState = await window.f95App.bootstrap();
-  Object.assign(state, nextState);
-  if (!state.games.some((game) => game.id === state.selectedGameId)) {
-    state.selectedGameId = null;
+  if (reloadStatePromise) {
+    reloadStateQueued = true;
+    return reloadStatePromise;
   }
-  render();
+
+  reloadStatePromise = (async () => {
+    do {
+      reloadStateQueued = false;
+      const nextState = await window.f95App.bootstrap();
+      Object.assign(state, nextState);
+      if (!state.games.some((game) => game.id === state.selectedGameId)) {
+        state.selectedGameId = null;
+      }
+      render();
+    } while (reloadStateQueued);
+  })();
+
+  try {
+    await reloadStatePromise;
+  } finally {
+    reloadStatePromise = null;
+  }
 }
 
 async function handleSettingsSubmit(event) {

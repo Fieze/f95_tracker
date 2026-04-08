@@ -305,7 +305,7 @@ class DatabaseService {
     return row ? this.hydrateFolder(row) : null;
   }
 
-  async upsertGameFolder(gameId, folder) {
+  async upsertGameFolder(gameId, folder, options = {}) {
     const now = new Date().toISOString();
     const existing = this.first("SELECT * FROM game_folders WHERE game_id = ? AND folder_path = ?", [gameId, folder.folderPath]);
     const versionSource = folder.versionSource || existing?.version_source || "inferred";
@@ -341,7 +341,9 @@ class DatabaseService {
       );
     }
 
-    await this.persist();
+    if (options.persist !== false) {
+      await this.persist();
+    }
     return this.listGameFolders(gameId);
   }
 
@@ -365,7 +367,7 @@ class DatabaseService {
     const nextPaths = new Set(nextFolders.map((folder) => folder.folderPath));
 
     for (const folder of nextFolders) {
-      await this.upsertGameFolder(gameId, folder);
+      await this.upsertGameFolder(gameId, folder, { persist: false });
     }
 
     for (const existing of existingFolders) {
