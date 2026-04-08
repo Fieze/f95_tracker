@@ -681,7 +681,10 @@ class AppService {
     const nextFolders = directSubdirectories.map((entry) => {
       const resolvedPath = path.resolve(entry.folderPath);
       const existing = existingByPath.get(resolvedPath);
-      const inferredVersion = extractVersionFromFilename(entry.folderName);
+      const inferredVersion = extractVersionFromFilename(entry.folderName, {
+        currentVersion: game.currentVersion,
+        installedVersion: game.installedVersion
+      });
       const isManual = existing?.versionSource === "manual";
       return {
         folderName: entry.folderName,
