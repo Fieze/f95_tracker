@@ -1,6 +1,7 @@
 const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 const { DatabaseService } = require("./db");
 const { archiveHasSingleRootDirectory, extractArchiveWithProgress } = require("./extractor");
 const { FolderWatcher } = require("./folderWatcher");
@@ -14,6 +15,7 @@ const {
   buildVersionedInstallDirectory,
   isExpectedGameInstallPath,
   normalizeThreadUrl,
+  rankLaunchExecutables,
   sanitizePathSegment,
   sanitizeVersion
 } = require("./utils");
@@ -215,6 +217,79 @@ class AppService {
     await this.syncGameFolders(gameId);
     this.emitChange();
     return this.db.getGameById(Number(gameId));
+  }
+
+  async listLaunchExecutables(folderRef) {
+    const folder = this.resolveFolderReference(folderRef);
+    if (!folder) {
+      throw new Error("Game folder not found.");
+    }
+
+    const game = this.db.getGameById(folder.gameId);
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    const entries = await fs.readdir(folder.folderPath, { withFileTypes: true }).catch((error) => {
+      if (error.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
+
+    const executables = entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".exe")
+      .map((entry) => ({
+        fileName: entry.name,
+        fullPath: path.join(folder.folderPath, entry.name)
+      }));
+
+    return {
+      executables: rankLaunchExecutables(executables, {
+        title: game.title,
+        threadTitle: game.threadTitle,
+        aliases: game.aliases
+      })
+    };
+  }
+
+  async launchExecutable(folderRef, executablePathArg) {
+    const executablePath =
+      folderRef && typeof folderRef === "object" ? folderRef.executablePath : executablePathArg;
+    const folder = this.resolveFolderReference(folderRef);
+    if (!folder) {
+      throw new Error("Game folder not found.");
+    }
+
+    const resolvedFolderPath = path.resolve(folder.folderPath);
+    const resolvedExecutablePath = path.resolve(String(executablePath || ""));
+    if (!resolvedExecutablePath || path.extname(resolvedExecutablePath).toLowerCase() !== ".exe") {
+      throw new Error("Executable path is invalid.");
+    }
+
+    const relativePath = path.relative(resolvedFolderPath, resolvedExecutablePath);
+    if (
+      !relativePath ||
+      relativePath.startsWith("..") ||
+      path.isAbsolute(relativePath) ||
+      relativePath.includes(path.sep)
+    ) {
+      throw new Error("Executable must be located directly inside the selected game folder.");
+    }
+
+    const stats = await fs.stat(resolvedExecutablePath).catch(() => null);
+    if (!stats?.isFile()) {
+      throw new Error("Executable could not be found.");
+    }
+
+    spawn(resolvedExecutablePath, [], {
+      cwd: resolvedFolderPath,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false
+    }).unref();
+
+    return { ok: true };
   }
 
   async validateInstallPath(gameId) {

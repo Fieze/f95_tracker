@@ -138,6 +138,8 @@ function bindIpc() {
   ipcMain.handle("games:updateFolderVersion", async (_event, payload) => appService.updateGameFolderVersion(payload));
   ipcMain.handle("games:deleteFolder", async (_event, payload) => appService.deleteGameFolder(payload));
   ipcMain.handle("games:refreshFolders", async (_event, payload) => appService.refreshGameFolders(payload.gameId));
+  ipcMain.handle("games:listLaunchExecutables", async (_event, payload) => appService.listLaunchExecutables(payload));
+  ipcMain.handle("games:launchExecutable", async (_event, payload) => appService.launchExecutable(payload));
   ipcMain.handle("games:inferInstalledVersion", async (_event, payload) =>
     appService.inferInstalledVersionFromFolder(payload.folderPath)
   );

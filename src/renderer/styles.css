@@ -295,6 +295,7 @@ label {
 }
 
 input,
+select,
 textarea,
 button,
 a {
@@ -302,6 +303,7 @@ a {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid rgba(171, 204, 191, 0.18);
@@ -667,6 +669,35 @@ button:hover,
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.install-folder-launch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.launch-status {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.launch-select {
+  min-width: 220px;
+  max-width: min(100%, 340px);
+}
+
+.launch-button {
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.launch-button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
 }
 
 .install-folder-version {

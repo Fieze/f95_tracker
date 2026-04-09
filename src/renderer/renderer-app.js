@@ -25,6 +25,7 @@ const GAME_TILE_GAP = 18;
 let gamesGridResizeObserver = null;
 let reloadStatePromise = null;
 let reloadStateQueued = false;
+const launchExecutableCache = new Map();
 
 function $(selector) {
   return document.querySelector(selector);
@@ -35,6 +36,23 @@ function createNode(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function createSvgNode(tag) {
+  return document.createElementNS("http://www.w3.org/2000/svg", tag);
+}
+
+function createPlayButton(label = "Play") {
+  const button = createNode("button", "secondary launch-button", label);
+  button.type = "button";
+  const icon = createSvgNode("svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  const path = createSvgNode("path");
+  path.setAttribute("d", "M8 6L18 12L8 18V6Z");
+  icon.appendChild(path);
+  button.prepend(icon);
+  return button;
 }
 
 function formatStatusLabel(status) {
@@ -87,6 +105,81 @@ function setImageSource(node, filePath, alt) {
   }
   node.src = filePathToUrl(filePath);
   node.alt = alt || "";
+}
+
+function getLaunchCacheKey(folder) {
+  return `${folder.id}:${folder.folderPath}`;
+}
+
+function getLaunchState(folder) {
+  const key = getLaunchCacheKey(folder);
+  let launchState = launchExecutableCache.get(key);
+  if (!launchState) {
+    launchState = {
+      status: "idle",
+      executables: [],
+      selectedPath: "",
+      errorMessage: "",
+      loadPromise: null
+    };
+    launchExecutableCache.set(key, launchState);
+  }
+  return launchState;
+}
+
+function pruneLaunchExecutableCache(games) {
+  const validKeys = new Set();
+  (games || []).forEach((game) => {
+    (game.folders || []).forEach((folder) => {
+      validKeys.add(getLaunchCacheKey(folder));
+    });
+  });
+
+  [...launchExecutableCache.keys()].forEach((key) => {
+    if (!validKeys.has(key)) {
+      launchExecutableCache.delete(key);
+    }
+  });
+}
+
+function ensureFolderLaunchState(game, folder, onChange) {
+  const launchState = getLaunchState(folder);
+  if (launchState.status === "loading" || launchState.status === "ready") {
+    return launchState;
+  }
+
+  launchState.status = "loading";
+  launchState.errorMessage = "";
+  launchState.loadPromise = window.f95App
+    .listLaunchExecutables({
+      gameId: game.id,
+      folderId: folder.id,
+      folderPath: folder.folderPath
+    })
+    .then((result) => {
+      launchState.status = "ready";
+      launchState.executables = result?.executables || [];
+      launchState.selectedPath =
+        launchState.selectedPath &&
+        launchState.executables.some((entry) => entry.fullPath === launchState.selectedPath)
+          ? launchState.selectedPath
+          : launchState.executables.find((entry) => entry.isRecommended)?.fullPath ||
+            launchState.executables[0]?.fullPath ||
+            "";
+      launchState.errorMessage = "";
+    })
+    .catch((error) => {
+      launchState.status = "error";
+      launchState.executables = [];
+      launchState.selectedPath = "";
+      launchState.errorMessage = error.message || "Executables could not be scanned.";
+    })
+    .finally(() => {
+      launchState.loadPromise = null;
+      onChange();
+    });
+
+  return launchState;
 }
 
 function closeLightbox() {
@@ -266,6 +359,64 @@ function buildGameDetailsCard(selectedGame) {
       info.appendChild(createNode("strong", "install-folder-name", folder.folderName));
       info.appendChild(createNode("span", "install-folder-path", folder.folderPath));
       const controls = createNode("div", "install-folder-controls");
+      const launchControls = createNode("div", "install-folder-launch");
+      const launchState = ensureFolderLaunchState(selectedGame, folder, renderInstallFolders);
+
+      if (launchState.status === "loading") {
+        launchControls.appendChild(createNode("span", "launch-status", "Scanning..."));
+      } else if (launchState.status === "error") {
+        const retryButton = createPlayButton("Retry");
+        retryButton.classList.add("launch-retry-button");
+        retryButton.addEventListener("click", () => {
+          launchExecutableCache.delete(getLaunchCacheKey(folder));
+          renderInstallFolders();
+        });
+        retryButton.title = launchState.errorMessage || "Executables could not be scanned.";
+        launchControls.appendChild(retryButton);
+      } else if (launchState.executables.length === 1) {
+        const playButton = createPlayButton();
+        playButton.addEventListener("click", async () => {
+          try {
+            await window.f95App.launchExecutable({
+              gameId: selectedGame.id,
+              folderId: folder.id,
+              executablePath: launchState.executables[0].fullPath
+            });
+          } catch (error) {
+            alert(error.message);
+          }
+        });
+        launchControls.appendChild(playButton);
+      } else if (launchState.executables.length > 1) {
+        const select = createNode("select", "launch-select");
+        launchState.executables.forEach((entry) => {
+          const option = createNode("option", "", entry.fileName);
+          option.value = entry.fullPath;
+          option.selected = entry.fullPath === launchState.selectedPath;
+          select.appendChild(option);
+        });
+        select.addEventListener("change", () => {
+          launchState.selectedPath = select.value;
+        });
+        const playButton = createPlayButton();
+        playButton.addEventListener("click", async () => {
+          try {
+            await window.f95App.launchExecutable({
+              gameId: selectedGame.id,
+              folderId: folder.id,
+              executablePath: launchState.selectedPath
+            });
+          } catch (error) {
+            alert(error.message);
+          }
+        });
+        launchControls.appendChild(select);
+        launchControls.appendChild(playButton);
+      }
+
+      if (launchControls.childElementCount > 0) {
+        controls.appendChild(launchControls);
+      }
 
       if (stateForFolder.editing) {
         const editor = createNode("div", "install-folder-editor");
@@ -633,6 +784,7 @@ async function reloadState() {
       reloadStateQueued = false;
       const nextState = await window.f95App.bootstrap();
       Object.assign(state, nextState);
+      pruneLaunchExecutableCache(state.games);
       if (!state.games.some((game) => game.id === state.selectedGameId)) {
         state.selectedGameId = null;
       }

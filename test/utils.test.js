@@ -9,6 +9,7 @@ const {
   deriveInstalledStateFromFolders,
   isExpectedGameInstallPath,
   normalizeThreadUrl,
+  rankLaunchExecutables,
   versionLabel
 } = require("../src/main/services/utils");
 
@@ -87,4 +88,37 @@ test("deriveInstalledStateFromFolders uses the highest versioned folder as the i
   assert.equal(derived.primaryFolderId, 2);
   assert.equal(derived.installedVersion, "0.10");
   assert.equal(derived.installPath, "D:\\Games\\Away from Home\\Away from Home-0.10");
+});
+
+test("rankLaunchExecutables prefers the most game-like executable over helpers", () => {
+  const ranked = rankLaunchExecutables(
+    [
+      { fileName: "UnityCrashHandler64.exe", fullPath: "D:\\Games\\Game\\UnityCrashHandler64.exe" },
+      { fileName: "Away From Home.exe", fullPath: "D:\\Games\\Game\\Away From Home.exe" },
+      { fileName: "unins000.exe", fullPath: "D:\\Games\\Game\\unins000.exe" }
+    ],
+    {
+      title: "Away From Home",
+      aliases: ["AFH"]
+    }
+  );
+
+  assert.equal(ranked[0].fileName, "Away From Home.exe");
+  assert.equal(ranked[0].isRecommended, true);
+});
+
+test("rankLaunchExecutables can fall back to aliases when the title is absent", () => {
+  const ranked = rankLaunchExecutables(
+    [
+      { fileName: "AFH.exe", fullPath: "D:\\Games\\Game\\AFH.exe" },
+      { fileName: "support-tool.exe", fullPath: "D:\\Games\\Game\\support-tool.exe" }
+    ],
+    {
+      title: "Away From Home",
+      aliases: ["AFH"]
+    }
+  );
+
+  assert.equal(ranked[0].fileName, "AFH.exe");
+  assert.equal(ranked[0].isRecommended, true);
 });

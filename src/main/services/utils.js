@@ -197,6 +197,141 @@ function deriveInstalledStateFromFolders(folders, fallback = {}) {
   };
 }
 
+function normalizeLaunchCandidate(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\.exe$/i, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function tokenizeLaunchCandidate(value) {
+  return normalizeLaunchCandidate(value)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function uniqueLaunchTerms(values) {
+  const terms = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = normalizeLaunchCandidate(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    terms.push(normalized);
+  }
+
+  return terms.sort((left, right) => right.length - left.length);
+}
+
+function scoreLaunchExecutable(fileName, game = {}) {
+  const candidate = normalizeLaunchCandidate(fileName);
+  const candidateTokens = tokenizeLaunchCandidate(fileName);
+  const terms = uniqueLaunchTerms([game.title, game.threadTitle, ...(game.aliases || [])]);
+  const negativePatterns = [
+    "unitycrashhandler",
+    "crashhandler",
+    "notificationhelper",
+    "unins",
+    "uninstall",
+    "setup",
+    "updater",
+    "patch",
+    "dxwebsetup",
+    "vc redist",
+    "vc redist x64",
+    "vc redist x86",
+    "vcredist",
+    "redist",
+    "support"
+  ];
+
+  let score = 0;
+  let matchedTerm = false;
+
+  for (const term of terms) {
+    const termTokens = tokenizeLaunchCandidate(term);
+    if (!termTokens.length) {
+      continue;
+    }
+
+    if (candidate === term) {
+      score += 180;
+      matchedTerm = true;
+      continue;
+    }
+
+    if (candidate.startsWith(term)) {
+      score += 120;
+      matchedTerm = true;
+    } else if (candidate.includes(term)) {
+      score += 90;
+      matchedTerm = true;
+    }
+
+    const tokenMatches = termTokens.filter((token) => candidateTokens.includes(token)).length;
+    if (tokenMatches > 0) {
+      score += tokenMatches * 16;
+      matchedTerm = true;
+    }
+  }
+
+  for (const pattern of negativePatterns) {
+    if (candidate.includes(pattern)) {
+      score -= 140;
+    }
+  }
+
+  if (candidate.includes("launcher")) {
+    score -= 20;
+  }
+
+  if (!matchedTerm) {
+    score += Math.max(6, 40 - candidate.length);
+  } else {
+    score += Math.max(0, 28 - candidate.length);
+  }
+
+  score += Math.max(0, 10 - Math.max(0, candidateTokens.length - 1) * 2);
+
+  return score;
+}
+
+function rankLaunchExecutables(executables, game = {}) {
+  const ranked = (Array.isArray(executables) ? executables : []).map((entry) => {
+    const fileName = typeof entry === "string" ? entry : entry.fileName;
+    const fullPath = typeof entry === "string" ? entry : entry.fullPath;
+    const score = scoreLaunchExecutable(fileName, game);
+    return {
+      fileName,
+      fullPath,
+      score,
+      isRecommended: false
+    };
+  });
+
+  ranked.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    if (left.fileName.length !== right.fileName.length) {
+      return left.fileName.length - right.fileName.length;
+    }
+
+    return left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" });
+  });
+
+  if (ranked[0]) {
+    ranked[0].isRecommended = true;
+  }
+
+  return ranked;
+}
+
 module.exports = {
   buildInstallDirectory,
   buildGameRootCandidates,
@@ -210,7 +345,9 @@ module.exports = {
   isSubPath,
   normalizeThreadUrl,
   pickPrimaryGameFolder,
+  rankLaunchExecutables,
   safeJsonParse,
+  scoreLaunchExecutable,
   sanitizePathSegment,
   sanitizeVersion,
   slugify,

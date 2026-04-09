@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("f95App", {
   updateGameFolderVersion: (payload) => ipcRenderer.invoke("games:updateFolderVersion", payload),
   deleteGameFolder: (payload) => ipcRenderer.invoke("games:deleteFolder", payload),
   refreshGameFolders: (gameId) => ipcRenderer.invoke("games:refreshFolders", { gameId }),
+  listLaunchExecutables: (payload) => ipcRenderer.invoke("games:listLaunchExecutables", payload),
+  launchExecutable: (payload) => ipcRenderer.invoke("games:launchExecutable", payload),
   inferInstalledVersion: (folderPath) => ipcRenderer.invoke("games:inferInstalledVersion", { folderPath }),
   validateInstallPath: (gameId) => ipcRenderer.invoke("games:validateInstallPath", { gameId }),
   moveInstallPath: (gameId) => ipcRenderer.invoke("games:moveInstallPath", { gameId }),
