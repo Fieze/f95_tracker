@@ -698,14 +698,26 @@ function renderGames() {
       button.classList.remove("has-image");
     }
     badge.classList.toggle("hidden", game.status !== "update-available");
-    threadStatusBadge.textContent = game.threadStatus || "";
+    threadStatusBadge.setAttribute("aria-label", game.threadStatus || "");
+    threadStatusBadge.setAttribute("title", game.threadStatus || "");
     threadStatusBadge.classList.remove("status-complete", "status-on-hold", "status-abandoned");
     const statusClass = threadStatusClass(game.threadStatus);
     if (statusClass) {
       threadStatusBadge.classList.add(statusClass);
     }
+    const statusLabel = threadStatusBadge.querySelector(".game-thread-status-label");
+    if (statusClass === "status-complete" || statusClass === "status-abandoned" || statusClass === "status-on-hold") {
+      if (statusLabel) {
+        statusLabel.textContent = "";
+      }
+    } else if (statusLabel) {
+      statusLabel.textContent = game.threadStatus || "";
+    }
     threadStatusBadge.classList.toggle("hidden", !game.threadStatus);
-    threadStatusBadge.classList.toggle("is-icon-badge", statusClass === "status-abandoned");
+    threadStatusBadge.classList.toggle(
+      "is-icon-badge",
+      statusClass === "status-complete" || statusClass === "status-abandoned" || statusClass === "status-on-hold"
+    );
     button.classList.toggle("is-selected", game.id === state.selectedGameId && state.openOverlay === "game-details");
     button.dataset.gameId = String(game.id);
     button.addEventListener("click", () => {

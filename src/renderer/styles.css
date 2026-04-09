@@ -602,7 +602,17 @@ button:hover,
   display: none;
 }
 
-.game-thread-status-badge.is-icon-badge .game-thread-status-icon-abandoned {
+.game-thread-status-label {
+  display: inline;
+}
+
+.game-thread-status-badge.is-icon-badge .game-thread-status-label {
+  display: none;
+}
+
+.game-thread-status-badge.status-complete.is-icon-badge .game-thread-status-icon-complete,
+.game-thread-status-badge.status-on-hold.is-icon-badge .game-thread-status-icon-on-hold,
+.game-thread-status-badge.status-abandoned.is-icon-badge .game-thread-status-icon-abandoned {
   display: block;
   width: calc(22px * var(--game-tile-scale));
   height: calc(22px * var(--game-tile-scale));
@@ -610,27 +620,42 @@ button:hover,
 }
 
 .game-thread-status-badge.status-complete {
-  background: rgba(34, 139, 34, 0.88);
-  border-color: rgba(163, 255, 163, 0.6);
-  color: #f3fff3;
+  color: rgba(241, 255, 241, 0.98);
+}
+
+.game-thread-status-badge.status-complete.is-icon-badge {
+  background: linear-gradient(145deg, rgba(92, 244, 134, 0.68), rgba(18, 132, 59, 0.4));
+  border-color: rgba(174, 255, 193, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(235, 255, 239, 0.34),
+    0 10px 24px rgba(0, 0, 0, 0.18),
+    0 0 18px rgba(92, 244, 134, 0.28);
 }
 
 .game-thread-status-badge.status-on-hold {
-  background: rgba(214, 143, 0, 0.9);
-  border-color: rgba(255, 224, 138, 0.65);
-  color: #fff7e8;
+  color: rgba(255, 249, 237, 0.98);
+}
+
+.game-thread-status-badge.status-on-hold.is-icon-badge {
+  background: linear-gradient(145deg, rgba(255, 217, 79, 0.7), rgba(224, 134, 0, 0.42));
+  border-color: rgba(255, 229, 139, 0.64);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 246, 216, 0.34),
+    0 10px 24px rgba(0, 0, 0, 0.18),
+    0 0 18px rgba(255, 212, 88, 0.28);
 }
 
 .game-thread-status-badge.status-abandoned {
-  color: rgba(255, 241, 241, 0.96);
+  color: rgba(255, 243, 243, 0.98);
 }
 
 .game-thread-status-badge.status-abandoned.is-icon-badge {
-  background: linear-gradient(145deg, rgba(229, 89, 89, 0.3), rgba(145, 22, 22, 0.18));
-  border-color: rgba(255, 154, 154, 0.28);
+  background: linear-gradient(145deg, rgba(245, 80, 80, 0.68), rgba(164, 18, 18, 0.42));
+  border-color: rgba(255, 167, 167, 0.62);
   box-shadow:
-    inset 0 1px 0 rgba(255, 228, 228, 0.14),
-    0 10px 24px rgba(0, 0, 0, 0.18);
+    inset 0 1px 0 rgba(255, 232, 232, 0.34),
+    0 10px 24px rgba(0, 0, 0, 0.18),
+    0 0 18px rgba(245, 80, 80, 0.26);
 }
 
 .game-card-header,
