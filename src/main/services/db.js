@@ -1,7 +1,13 @@
 const fs = require("fs/promises");
 const path = require("path");
 const initSqlJs = require("sql.js");
-const { deriveInstalledStateFromFolders, rankGameFolders, safeJsonParse, versionLabel } = require("./utils");
+const {
+  deriveInstalledStateFromFolders,
+  extractThreadId,
+  rankGameFolders,
+  safeJsonParse,
+  versionLabel
+} = require("./utils");
 
 class DatabaseService {
   constructor(userDataPath) {
@@ -47,6 +53,7 @@ class DatabaseService {
 
       CREATE TABLE IF NOT EXISTS games (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT,
         thread_url TEXT UNIQUE NOT NULL,
         title TEXT NOT NULL,
         thread_title TEXT,
@@ -127,6 +134,7 @@ class DatabaseService {
       );
     `);
     this.ensureColumn("games", "parser_debug", "TEXT DEFAULT '{}'");
+    this.ensureColumn("games", "thread_id", "TEXT");
     this.ensureColumn("games", "thread_title", "TEXT");
     this.ensureColumn("games", "release_date", "TEXT");
     this.ensureColumn("games", "banner_image_path", "TEXT");
@@ -138,6 +146,9 @@ class DatabaseService {
     this.ensureColumn("game_folders", "season_final", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("game_folders", "preferred_exe_path", "TEXT");
     this.ensureColumn("game_folders", "sort_rank", "INTEGER");
+    this.backfillThreadIds();
+    this.mergeDuplicateGamesByThreadId();
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_games_thread_id ON games(thread_id) WHERE thread_id IS NOT NULL");
   }
 
   ensureColumn(tableName, columnName, definition) {
@@ -179,69 +190,85 @@ class DatabaseService {
   }
 
   async upsertGameFromThread(parsedThread) {
-    const existing = this.first("SELECT id, aliases FROM games WHERE thread_url = ?", [parsedThread.sourceUrl]);
+    const threadId = parsedThread.threadId || extractThreadId(parsedThread.sourceUrl);
+    const existing = this.first(
+      "SELECT id, aliases, has_seasons, installed_version, install_path FROM games WHERE thread_id = ? OR thread_url = ? ORDER BY id ASC LIMIT 1",
+      [threadId, parsedThread.sourceUrl]
+    );
     const aliasSet = new Set([
       ...(existing ? safeJsonParse(existing.aliases, []) : []),
       parsedThread.title,
       parsedThread.threadTitle
     ]);
+    const now = new Date().toISOString();
 
-    const stmt = this.db.prepare(`
-      INSERT INTO games (
-        id, thread_url, title, thread_title, has_seasons, current_version, developer, engine, thread_status, overview, release_date, changelog,
-        banner_image_path, screenshot_images, tags,
-        aliases, raw_op_html, raw_op_text, parser_debug, parser_warnings, last_sync_at, last_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(thread_url) DO UPDATE SET
-        title = excluded.title,
-        thread_title = excluded.thread_title,
-        has_seasons = COALESCE(games.has_seasons, excluded.has_seasons),
-        current_version = excluded.current_version,
-        developer = excluded.developer,
-        engine = excluded.engine,
-        thread_status = excluded.thread_status,
-        overview = excluded.overview,
-        release_date = excluded.release_date,
-        changelog = excluded.changelog,
-        banner_image_path = excluded.banner_image_path,
-        screenshot_images = excluded.screenshot_images,
-        tags = excluded.tags,
-        aliases = excluded.aliases,
-        raw_op_html = excluded.raw_op_html,
-        raw_op_text = excluded.raw_op_text,
-        parser_debug = excluded.parser_debug,
-        parser_warnings = excluded.parser_warnings,
-        last_sync_at = excluded.last_sync_at,
-        last_sync_status = excluded.last_sync_status
-    `);
+    if (existing) {
+      this.db.run(
+        `UPDATE games SET
+          thread_id = ?, thread_url = ?, title = ?, thread_title = ?, has_seasons = ?, current_version = ?, developer = ?, engine = ?,
+          thread_status = ?, overview = ?, release_date = ?, changelog = ?, banner_image_path = ?, screenshot_images = ?, tags = ?,
+          aliases = ?, raw_op_html = ?, raw_op_text = ?, parser_debug = ?, parser_warnings = ?, last_sync_at = ?, last_sync_status = ?
+        WHERE id = ?`,
+        [
+          threadId,
+          parsedThread.sourceUrl,
+          parsedThread.title,
+          parsedThread.threadTitle,
+          existing.has_seasons ? 1 : parsedThread.hasSeasons ? 1 : 0,
+          parsedThread.currentVersion,
+          parsedThread.developer,
+          parsedThread.engine,
+          parsedThread.threadStatus,
+          parsedThread.overview,
+          parsedThread.releaseDate,
+          parsedThread.changelog,
+          parsedThread.bannerImage?.localPath || null,
+          JSON.stringify(parsedThread.screenshotImages || []),
+          JSON.stringify(parsedThread.tags),
+          JSON.stringify([...aliasSet]),
+          parsedThread.rawOpHtml,
+          parsedThread.rawOpText,
+          JSON.stringify(parsedThread.parserDebug || {}),
+          JSON.stringify(parsedThread.warnings),
+          now,
+          "success",
+          existing.id
+        ]
+      );
+    } else {
+      this.db.run(
+        `INSERT INTO games (
+          thread_id, thread_url, title, thread_title, has_seasons, current_version, developer, engine, thread_status, overview, release_date, changelog,
+          banner_image_path, screenshot_images, tags, aliases, raw_op_html, raw_op_text, parser_debug, parser_warnings, last_sync_at, last_sync_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          threadId,
+          parsedThread.sourceUrl,
+          parsedThread.title,
+          parsedThread.threadTitle,
+          parsedThread.hasSeasons ? 1 : 0,
+          parsedThread.currentVersion,
+          parsedThread.developer,
+          parsedThread.engine,
+          parsedThread.threadStatus,
+          parsedThread.overview,
+          parsedThread.releaseDate,
+          parsedThread.changelog,
+          parsedThread.bannerImage?.localPath || null,
+          JSON.stringify(parsedThread.screenshotImages || []),
+          JSON.stringify(parsedThread.tags),
+          JSON.stringify([...aliasSet]),
+          parsedThread.rawOpHtml,
+          parsedThread.rawOpText,
+          JSON.stringify(parsedThread.parserDebug || {}),
+          JSON.stringify(parsedThread.warnings),
+          now,
+          "success"
+        ]
+      );
+    }
 
-    stmt.run([
-      existing ? existing.id : null,
-      parsedThread.sourceUrl,
-      parsedThread.title,
-      parsedThread.threadTitle,
-      parsedThread.hasSeasons ? 1 : 0,
-      parsedThread.currentVersion,
-      parsedThread.developer,
-      parsedThread.engine,
-      parsedThread.threadStatus,
-      parsedThread.overview,
-      parsedThread.releaseDate,
-      parsedThread.changelog,
-      parsedThread.bannerImage?.localPath || null,
-      JSON.stringify(parsedThread.screenshotImages || []),
-      JSON.stringify(parsedThread.tags),
-      JSON.stringify([...aliasSet]),
-      parsedThread.rawOpHtml,
-      parsedThread.rawOpText,
-      JSON.stringify(parsedThread.parserDebug || {}),
-      JSON.stringify(parsedThread.warnings),
-      new Date().toISOString(),
-      "success"
-    ]);
-    stmt.free();
-
-    const game = this.first("SELECT * FROM games WHERE thread_url = ?", [parsedThread.sourceUrl]);
+    const game = this.first("SELECT * FROM games WHERE thread_id = ?", [threadId]);
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [game.id]);
 
     const linkStmt = this.db.prepare(`
@@ -551,6 +578,7 @@ class DatabaseService {
     this.db.run("PRAGMA foreign_keys = OFF;");
     try {
       this.db.run("BEGIN TRANSACTION;");
+      this.db.run("DROP INDEX IF EXISTS idx_games_thread_id");
       this.db.run("DELETE FROM download_links");
       this.db.run("DELETE FROM archive_jobs");
       this.db.run("DELETE FROM sync_runs");
@@ -561,6 +589,10 @@ class DatabaseService {
       for (const tableName of tableOrder) {
         this.insertRows(tableName, snapshot.tables[tableName] || []);
       }
+
+      this.backfillThreadIds();
+      this.mergeDuplicateGamesByThreadId();
+      this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_games_thread_id ON games(thread_id) WHERE thread_id IS NOT NULL");
 
       this.db.run("COMMIT;");
     } catch (error) {
@@ -594,6 +626,174 @@ class DatabaseService {
     }
 
     stmt.free();
+  }
+
+  backfillThreadIds() {
+    const rows = this.query("SELECT id, thread_url, thread_id FROM games ORDER BY id ASC");
+    const stmt = this.db.prepare("UPDATE games SET thread_id = ? WHERE id = ?");
+    for (const row of rows) {
+      if (row.thread_id) {
+        continue;
+      }
+
+      const threadId = extractThreadId(row.thread_url);
+      if (threadId) {
+        stmt.run([threadId, row.id]);
+      }
+    }
+    stmt.free();
+  }
+
+  mergeDuplicateGamesByThreadId() {
+    const duplicateGroups = this.query(`
+      SELECT thread_id
+      FROM games
+      WHERE thread_id IS NOT NULL
+      GROUP BY thread_id
+      HAVING COUNT(*) > 1
+    `);
+
+    for (const group of duplicateGroups) {
+      const rows = this.query("SELECT * FROM games WHERE thread_id = ? ORDER BY id ASC", [group.thread_id]);
+      if (rows.length < 2) {
+        continue;
+      }
+
+      this.mergeGameGroup(rows);
+    }
+  }
+
+  mergeGameGroup(rows) {
+    const keeper = rows[0];
+    const winner = [...rows].sort((left, right) => this.compareIsoDates(right.last_sync_at, left.last_sync_at) || right.id - left.id)[0];
+    const duplicateIds = rows.slice(1).map((row) => row.id);
+    const mergedAliases = new Set();
+
+    for (const row of rows) {
+      safeJsonParse(row.aliases, []).forEach((alias) => mergedAliases.add(alias));
+      if (row.title) {
+        mergedAliases.add(row.title);
+      }
+      if (row.thread_title) {
+        mergedAliases.add(row.thread_title);
+      }
+    }
+
+    for (const row of rows) {
+      if (row.id === keeper.id) {
+        continue;
+      }
+
+      this.db.run("UPDATE games SET thread_url = ? WHERE id = ?", [`${row.thread_url}#merged-${row.id}`, row.id]);
+    }
+
+    this.db.run(
+      `UPDATE games SET
+        thread_id = ?, thread_url = ?, title = ?, thread_title = ?, has_seasons = ?, current_version = ?, installed_version = ?, install_path = ?,
+        developer = ?, engine = ?, thread_status = ?, overview = ?, release_date = ?, changelog = ?, banner_image_path = ?,
+        screenshot_images = ?, tags = ?, aliases = ?, raw_op_html = ?, raw_op_text = ?, parser_debug = ?, parser_warnings = ?, last_sync_at = ?, last_sync_status = ?
+      WHERE id = ?`,
+      [
+        keeper.thread_id || winner.thread_id,
+        winner.thread_url || keeper.thread_url,
+        winner.title || keeper.title,
+        winner.thread_title || keeper.thread_title,
+        rows.some((row) => Boolean(row.has_seasons)) ? 1 : 0,
+        winner.current_version || keeper.current_version,
+        keeper.installed_version || winner.installed_version,
+        keeper.install_path || winner.install_path,
+        winner.developer || keeper.developer,
+        winner.engine || keeper.engine,
+        winner.thread_status || keeper.thread_status,
+        winner.overview || keeper.overview,
+        winner.release_date || keeper.release_date,
+        winner.changelog || keeper.changelog,
+        winner.banner_image_path || keeper.banner_image_path,
+        winner.screenshot_images || keeper.screenshot_images,
+        winner.tags || keeper.tags,
+        JSON.stringify([...mergedAliases]),
+        winner.raw_op_html || keeper.raw_op_html,
+        winner.raw_op_text || keeper.raw_op_text,
+        winner.parser_debug || keeper.parser_debug,
+        winner.parser_warnings || keeper.parser_warnings,
+        winner.last_sync_at || keeper.last_sync_at,
+        winner.last_sync_status || keeper.last_sync_status,
+        keeper.id
+      ]
+    );
+
+    const winnerLinks = this.query(
+      "SELECT group_label, label, url, last_seen_at FROM download_links WHERE game_id = ? ORDER BY id ASC",
+      [winner.id]
+    );
+    this.db.run("DELETE FROM download_links WHERE game_id = ?", [keeper.id]);
+    if (winnerLinks.length) {
+      const seenLinks = new Set();
+      const stmt = this.db.prepare(
+        "INSERT INTO download_links (game_id, group_label, label, url, last_seen_at) VALUES (?, ?, ?, ?, ?)"
+      );
+      for (const link of winnerLinks) {
+        const key = JSON.stringify([link.group_label || "", link.label || "", link.url || ""]);
+        if (seenLinks.has(key)) {
+          continue;
+        }
+        seenLinks.add(key);
+        stmt.run([keeper.id, link.group_label, link.label, link.url, link.last_seen_at]);
+      }
+      stmt.free();
+    }
+
+    for (const duplicateId of duplicateIds) {
+      this.mergeFoldersIntoGame(keeper.id, duplicateId);
+      this.db.run("UPDATE sync_runs SET game_id = ? WHERE game_id = ?", [keeper.id, duplicateId]);
+      this.db.run("UPDATE archive_jobs SET game_id = ? WHERE game_id = ?", [keeper.id, duplicateId]);
+      this.db.run("DELETE FROM download_links WHERE game_id = ?", [duplicateId]);
+      this.db.run("DELETE FROM games WHERE id = ?", [duplicateId]);
+    }
+  }
+
+  mergeFoldersIntoGame(targetGameId, sourceGameId) {
+    const sourceFolders = this.query("SELECT * FROM game_folders WHERE game_id = ? ORDER BY id ASC", [sourceGameId]);
+    for (const folder of sourceFolders) {
+      const existing = this.first("SELECT * FROM game_folders WHERE game_id = ? AND folder_path = ?", [
+        targetGameId,
+        folder.folder_path
+      ]);
+
+      if (!existing) {
+        this.db.run("UPDATE game_folders SET game_id = ? WHERE id = ?", [targetGameId, folder.id]);
+        continue;
+      }
+
+      this.db.run(
+        `UPDATE game_folders SET
+          folder_name = ?, version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, sort_rank = ?, updated_at = ?
+        WHERE id = ?`,
+        [
+          existing.folder_name || folder.folder_name,
+          existing.version || folder.version,
+          existing.version_source === "manual" ? existing.version_source : folder.version_source || existing.version_source,
+          existing.season_number ?? folder.season_number ?? null,
+          existing.season_final || folder.season_final ? 1 : 0,
+          existing.preferred_exe_path || folder.preferred_exe_path,
+          existing.sort_rank ?? folder.sort_rank ?? null,
+          existing.updated_at || folder.updated_at || new Date().toISOString(),
+          existing.id
+        ]
+      );
+      this.db.run("DELETE FROM game_folders WHERE id = ?", [folder.id]);
+    }
+  }
+
+  compareIsoDates(left, right) {
+    const leftTime = left ? Date.parse(left) : Number.NaN;
+    const rightTime = right ? Date.parse(right) : Number.NaN;
+    const safeLeft = Number.isNaN(leftTime) ? -Infinity : leftTime;
+    const safeRight = Number.isNaN(rightTime) ? -Infinity : rightTime;
+    if (safeLeft === safeRight) {
+      return 0;
+    }
+    return safeLeft < safeRight ? -1 : 1;
   }
 
   hydrateGame(row, links, folders) {

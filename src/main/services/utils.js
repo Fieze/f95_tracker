@@ -33,6 +33,16 @@ function normalizeThreadUrl(input) {
   return `https://f95zone.to/threads/${match[1]}/`;
 }
 
+function extractThreadId(input) {
+  const normalizedUrl = normalizeThreadUrl(input);
+  const match = normalizedUrl.match(/\.([0-9]+)\/$/);
+  if (!match) {
+    throw new Error("Could not extract the thread id from the URL.");
+  }
+
+  return match[1];
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -434,6 +444,7 @@ module.exports = {
   compareVersions,
   deriveInstalledStateFromFolders,
   delay,
+  extractThreadId,
   isExpectedGameInstallPath,
   isSubPath,
   normalizeThreadUrl,

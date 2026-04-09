@@ -254,6 +254,7 @@ function renderOverlays() {
   const settingsOpen = state.openOverlay === "settings";
   const loginOpen = state.openOverlay === "login";
   const addThreadOpen = state.openOverlay === "add-thread";
+  const gameDetailsOpen = state.openOverlay === "game-details";
   const editFolderOpen = state.openOverlay === "edit-folder";
 
   $("#open-settings-panel")?.setAttribute("aria-pressed", settingsOpen ? "true" : "false");
@@ -262,6 +263,7 @@ function renderOverlays() {
   $("#settings-panel")?.classList.toggle("hidden", !settingsOpen);
   $("#login-panel")?.classList.toggle("hidden", !loginOpen);
   $("#add-thread-panel")?.classList.toggle("hidden", !addThreadOpen);
+  $("#game-details-panel")?.classList.toggle("hidden", !gameDetailsOpen);
   $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
 }
@@ -513,6 +515,24 @@ function getSelectedGame() {
   return state.games.find((game) => game.id === state.selectedGameId) || null;
 }
 
+function renderGameDetailsPanel() {
+  const panel = $("#game-details-panel");
+  const body = $("#game-details-panel-body");
+  if (!panel || !body) {
+    return;
+  }
+
+  const game = getSelectedGame();
+  body.innerHTML = "";
+  if (!game || state.openOverlay !== "game-details") {
+    return;
+  }
+
+  $("#game-details-panel-title").textContent = game.title;
+  $("#game-details-panel-subtitle").textContent = `Version ${game.currentVersion || "unknown"} | ${game.developer || "Unknown developer"}`;
+  body.appendChild(buildGameDetailsCard(game));
+}
+
 function getEditingFolderContext() {
   const game = getSelectedGame();
   if (!game || !state.editingFolderId) {
@@ -610,7 +630,7 @@ function renderEditFolderPanel() {
         folderPath: folder.folderPath
       });
       state.editingFolderId = null;
-      state.openOverlay = null;
+      state.openOverlay = state.selectedGameId ? "game-details" : null;
       await reloadState();
     } catch (error) {
       alert(error.message);
@@ -636,7 +656,7 @@ function renderEditFolderPanel() {
         preferredExePath: executableSelect.value || null
       });
       state.editingFolderId = null;
-      state.openOverlay = null;
+      state.openOverlay = state.selectedGameId ? "game-details" : null;
       await reloadState();
     } catch (error) {
       alert(error.message);
@@ -657,18 +677,8 @@ function renderGames() {
 
   container.className = "games-list";
   const template = $("#game-card-template");
-  const selectedIndex = state.games.findIndex((game) => game.id === state.selectedGameId);
-  const selectedGame = selectedIndex >= 0 ? state.games[selectedIndex] : null;
-  const gridMetrics = getGamesGridMetrics(container.clientWidth);
-  const selectedRowEndIndex =
-    selectedIndex >= 0
-      ? Math.min(
-          state.games.length - 1,
-          Math.floor(selectedIndex / gridMetrics.columns) * gridMetrics.columns + gridMetrics.columns - 1
-        )
-      : -1;
 
-  state.games.forEach((game, index) => {
+  state.games.forEach((game) => {
     const fragment = template.content.cloneNode(true);
     const tile = fragment.querySelector(".game-tile");
     const button = fragment.querySelector(".game-tile-button");
@@ -695,19 +705,23 @@ function renderGames() {
       threadStatusBadge.classList.add(statusClass);
     }
     threadStatusBadge.classList.toggle("hidden", !game.threadStatus);
-    button.classList.toggle("is-selected", game.id === state.selectedGameId);
+    threadStatusBadge.classList.toggle("is-icon-badge", statusClass === "status-abandoned");
+    button.classList.toggle("is-selected", game.id === state.selectedGameId && state.openOverlay === "game-details");
+    button.dataset.gameId = String(game.id);
     button.addEventListener("click", () => {
-      state.selectedGameId = state.selectedGameId === game.id ? null : game.id;
-      renderGames();
+      if (state.selectedGameId === game.id && state.openOverlay === "game-details") {
+        state.selectedGameId = null;
+        state.editingFolderId = null;
+        state.openOverlay = null;
+      } else {
+        state.selectedGameId = game.id;
+        state.editingFolderId = null;
+        state.openOverlay = "game-details";
+      }
+      render();
     });
 
     container.appendChild(tile);
-
-    if (selectedGame && index === selectedRowEndIndex) {
-      const detailsRow = createNode("div", "game-details-row");
-      detailsRow.appendChild(buildGameDetailsCard(selectedGame));
-      container.appendChild(detailsRow);
-    }
   });
 
   layoutGamesGrid();
@@ -831,11 +845,12 @@ function renderExtractionStatus() {
 function render() {
   setSettingsForm(state.settings);
   renderAuth();
-  renderOverlays();
   renderStats();
   renderGames();
+  renderGameDetailsPanel();
   renderEditFolderPanel();
   renderJobs();
+  renderOverlays();
 }
 
 async function reloadState() {
@@ -852,11 +867,14 @@ async function reloadState() {
       pruneLaunchExecutableCache(state.games);
       if (!state.games.some((game) => game.id === state.selectedGameId)) {
         state.selectedGameId = null;
+        if (state.openOverlay === "game-details") {
+          state.openOverlay = null;
+        }
       }
       if (!state.games.some((game) => (game.folders || []).some((folder) => folder.id === state.editingFolderId))) {
         state.editingFolderId = null;
         if (state.openOverlay === "edit-folder") {
-          state.openOverlay = null;
+          state.openOverlay = state.selectedGameId ? "game-details" : null;
         }
       }
       render();
@@ -1012,25 +1030,33 @@ async function initialize() {
       closeLightbox();
     }
   });
-  $("#overlay-backdrop").addEventListener("click", () => {
-    state.openOverlay = null;
-    state.editingFolderId = null;
-    renderOverlays();
-  });
-  document.querySelectorAll("[data-close-overlay]").forEach((button) => {
-    button.addEventListener("click", () => {
+
+  function closeCurrentOverlay() {
+    if (state.openOverlay === "edit-folder") {
+      state.editingFolderId = null;
+      state.openOverlay = state.selectedGameId ? "game-details" : null;
+    } else if (state.openOverlay === "game-details") {
+      state.selectedGameId = null;
+      state.editingFolderId = null;
+      state.openOverlay = null;
+    } else {
       state.openOverlay = null;
       state.editingFolderId = null;
-      renderOverlays();
-    });
+    }
+    render();
+  }
+
+  $("#overlay-backdrop").addEventListener("click", closeCurrentOverlay);
+  document.querySelectorAll("[data-close-overlay]").forEach((button) => {
+    button.addEventListener("click", closeCurrentOverlay);
   });
+  $("#close-game-details").addEventListener("click", closeCurrentOverlay);
+  $("#edit-folder-cancel").addEventListener("click", closeCurrentOverlay);
   $("#lightbox-close").addEventListener("click", closeLightbox);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (state.openOverlay) {
-        state.openOverlay = null;
-        state.editingFolderId = null;
-        renderOverlays();
+        closeCurrentOverlay();
       }
       closeLightbox();
     }
