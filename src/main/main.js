@@ -131,11 +131,15 @@ function bindIpc() {
   ipcMain.handle("games:addThread", async (_event, payload) => appService.addThread(payload.url));
   ipcMain.handle("games:delete", async (_event, gameId) => appService.deleteGame(gameId));
   ipcMain.handle("games:refresh", async (_event, gameId) => appService.refreshGame(gameId));
+  ipcMain.handle("games:updateSeasons", async (_event, payload) =>
+    appService.updateGameSeasons(payload.gameId, payload.hasSeasons)
+  );
   ipcMain.handle("games:setInstalledVersion", async (_event, payload) =>
     appService.setInstalledVersion(payload.gameId, payload.installedVersion, payload.installPath)
   );
   ipcMain.handle("games:listFolders", async (_event, payload) => appService.listGameFolders(payload.gameId));
   ipcMain.handle("games:updateFolderVersion", async (_event, payload) => appService.updateGameFolderVersion(payload));
+  ipcMain.handle("games:updateFolderMetadata", async (_event, payload) => appService.updateGameFolderMetadata(payload, payload));
   ipcMain.handle("games:deleteFolder", async (_event, payload) => appService.deleteGameFolder(payload));
   ipcMain.handle("games:refreshFolders", async (_event, payload) => appService.refreshGameFolders(payload.gameId));
   ipcMain.handle("games:listLaunchExecutables", async (_event, payload) => appService.listLaunchExecutables(payload));

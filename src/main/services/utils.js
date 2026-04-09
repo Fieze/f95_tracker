@@ -167,24 +167,37 @@ function pickPrimaryGameFolder(folders, compareVersionsFn = compareVersions) {
     return null;
   }
 
-  const versionedFolders = normalizedFolders.filter((folder) => folder.version);
-  const candidateSet = versionedFolders.length > 0 ? versionedFolders : normalizedFolders;
+  const allHaveSortRank = normalizedFolders.every((folder) => Number.isFinite(Number(folder.sortRank)));
+  if (!allHaveSortRank) {
+    const versionedFolders = normalizedFolders.filter((folder) => folder.version);
+    const candidateSet = versionedFolders.length > 0 ? versionedFolders : normalizedFolders;
 
-  return [...candidateSet].sort((left, right) => {
-    const versionSort = compareVersionsFn(right.version, left.version);
-    if (versionSort !== 0) {
-      return versionSort;
+    return [...candidateSet].sort((left, right) => {
+      const versionSort = compareVersionsFn(right.version, left.version);
+      if (versionSort !== 0) {
+        return versionSort;
+      }
+
+      const leftTime = new Date(left.updatedAt || left.createdAt || 0).getTime();
+      const rightTime = new Date(right.updatedAt || right.createdAt || 0).getTime();
+      if (leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+
+      return String(left.folderName || "").localeCompare(String(right.folderName || ""), undefined, {
+        sensitivity: "base"
+      });
+    })[0];
+  }
+
+  return [...normalizedFolders].sort((left, right) => {
+    const leftRank = Number.isFinite(Number(left.sortRank)) ? Number(left.sortRank) : Number.MAX_SAFE_INTEGER;
+    const rightRank = Number.isFinite(Number(right.sortRank)) ? Number(right.sortRank) : Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
     }
 
-    const leftTime = new Date(left.updatedAt || left.createdAt || 0).getTime();
-    const rightTime = new Date(right.updatedAt || right.createdAt || 0).getTime();
-    if (leftTime !== rightTime) {
-      return rightTime - leftTime;
-    }
-
-    return String(left.folderName || "").localeCompare(String(right.folderName || ""), undefined, {
-      sensitivity: "base"
-    });
+    return Number(left.id || 0) - Number(right.id || 0);
   })[0];
 }
 
@@ -195,6 +208,86 @@ function deriveInstalledStateFromFolders(folders, fallback = {}) {
     installPath: primaryFolder?.folderPath || fallback.installPath || null,
     primaryFolderId: primaryFolder?.id || null
   };
+}
+
+function getSeasonOrderingValues(seasonNumbers) {
+  const normalized = [...new Set((seasonNumbers || []).filter((value) => Number.isInteger(value)))].sort((a, b) => a - b);
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const highest = normalized[normalized.length - 1];
+  return [highest, ...normalized.filter((value) => value !== highest)];
+}
+
+function compareFoldersForStableRanking(left, right, compareVersionsFn = compareVersions) {
+  const versionSort = compareVersionsFn(right.version, left.version);
+  if (versionSort !== 0) {
+    return versionSort;
+  }
+
+  const leftRank = Number.isFinite(Number(left.sortRank)) ? Number(left.sortRank) : Number.MAX_SAFE_INTEGER;
+  const rightRank = Number.isFinite(Number(right.sortRank)) ? Number(right.sortRank) : Number.MAX_SAFE_INTEGER;
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  const leftTime = new Date(left.createdAt || left.updatedAt || 0).getTime();
+  const rightTime = new Date(right.createdAt || right.updatedAt || 0).getTime();
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+
+  return String(left.folderName || "").localeCompare(String(right.folderName || ""), undefined, {
+    sensitivity: "base"
+  });
+}
+
+function rankGameFolders(folders, options = {}) {
+  const normalizedFolders = Array.isArray(folders) ? folders.filter(Boolean).map((folder) => ({ ...folder })) : [];
+  const hasSeasons = Boolean(options.hasSeasons);
+  const compareVersionsFn = options.compareVersionsFn || compareVersions;
+  if (normalizedFolders.length === 0) {
+    return [];
+  }
+
+  const groups = new Map();
+  const pushToGroup = (groupKey, folder) => {
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, []);
+    }
+    groups.get(groupKey).push(folder);
+  };
+
+  if (!hasSeasons) {
+    normalizedFolders.forEach((folder) => pushToGroup("all", folder));
+  } else {
+    normalizedFolders.forEach((folder) => {
+      if (Number.isInteger(folder.seasonNumber)) {
+        pushToGroup(`season:${folder.seasonNumber}`, folder);
+      } else {
+        pushToGroup("season:none", folder);
+      }
+    });
+  }
+
+  const seasonOrder = hasSeasons
+    ? getSeasonOrderingValues(
+        normalizedFolders.map((folder) => (Number.isInteger(folder.seasonNumber) ? folder.seasonNumber : null))
+      ).map((season) => `season:${season}`)
+    : ["all"];
+  const groupOrder = hasSeasons && groups.has("season:none") ? [...seasonOrder, "season:none"] : seasonOrder;
+
+  const orderedFolders = [];
+  for (const groupKey of groupOrder) {
+    const groupFolders = groups.get(groupKey) || [];
+    orderedFolders.push(...groupFolders.sort((left, right) => compareFoldersForStableRanking(left, right, compareVersionsFn)));
+  }
+
+  return orderedFolders.map((folder, index) => ({
+    ...folder,
+    sortRank: index + 1
+  }));
 }
 
 function normalizeLaunchCandidate(value) {
@@ -345,6 +438,7 @@ module.exports = {
   isSubPath,
   normalizeThreadUrl,
   pickPrimaryGameFolder,
+  rankGameFolders,
   rankLaunchExecutables,
   safeJsonParse,
   scoreLaunchExecutable,

@@ -14,6 +14,7 @@ const state = {
   archiveJobs: [],
   currentExtraction: null,
   selectedGameId: null,
+  editingFolderId: null,
   openOverlay: null
 };
 
@@ -78,6 +79,32 @@ function threadStatusClass(value) {
 
 function formatFolderVersionLabel(folder) {
   return folder.version || "No version";
+}
+
+function formatFolderDisplayVersion(game, folder) {
+  const finalSuffix = folder.seasonFinal ? " (Final)" : "";
+  if (folder.version && game.currentVersion && String(folder.version) === String(game.currentVersion)) {
+    return `latest${finalSuffix}`;
+  }
+  const baseVersion = folder.version || "No version";
+  return `${baseVersion}${finalSuffix}`;
+}
+
+function getFolderVersionTone(game, folder) {
+  if (folder.version && game.currentVersion && String(folder.version) === String(game.currentVersion)) {
+    return "is-latest";
+  }
+  if (!folder.version) {
+    return "is-empty";
+  }
+  return "";
+}
+
+function formatFolderSeasonLabel(folder) {
+  if (!folder.seasonNumber) {
+    return "No season";
+  }
+  return String(folder.seasonNumber);
 }
 
 function formatDurationMs(value) {
@@ -227,6 +254,7 @@ function renderOverlays() {
   const settingsOpen = state.openOverlay === "settings";
   const loginOpen = state.openOverlay === "login";
   const addThreadOpen = state.openOverlay === "add-thread";
+  const editFolderOpen = state.openOverlay === "edit-folder";
 
   $("#open-settings-panel")?.setAttribute("aria-pressed", settingsOpen ? "true" : "false");
   $("#open-login-panel")?.setAttribute("aria-pressed", loginOpen ? "true" : "false");
@@ -234,6 +262,7 @@ function renderOverlays() {
   $("#settings-panel")?.classList.toggle("hidden", !settingsOpen);
   $("#login-panel")?.classList.toggle("hidden", !loginOpen);
   $("#add-thread-panel")?.classList.toggle("hidden", !addThreadOpen);
+  $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
 }
 
@@ -331,8 +360,6 @@ function buildGameDetailsCard(selectedGame) {
   threadLink.href = selectedGame.threadUrl;
   threadLink.textContent = "Open Thread";
 
-  const folderStates = new Map();
-
   const renderInstallFolders = () => {
     installFolders.innerHTML = "";
     const folders = selectedGame.folders || [];
@@ -344,12 +371,6 @@ function buildGameDetailsCard(selectedGame) {
 
     installFolders.classList.remove("empty-state");
     folders.forEach((folder) => {
-      const stateForFolder = folderStates.get(folder.id) || {
-        editing: false,
-        value: folder.version || ""
-      };
-      folderStates.set(folder.id, stateForFolder);
-
       const row = createNode("div", "install-folder-row");
       if (selectedGame.primaryFolderId === folder.id) {
         row.classList.add("is-primary");
@@ -359,143 +380,51 @@ function buildGameDetailsCard(selectedGame) {
       info.appendChild(createNode("strong", "install-folder-name", folder.folderName));
       info.appendChild(createNode("span", "install-folder-path", folder.folderPath));
       const controls = createNode("div", "install-folder-controls");
-      const launchControls = createNode("div", "install-folder-launch");
-      const launchState = ensureFolderLaunchState(selectedGame, folder, renderInstallFolders);
-
-      if (launchState.status === "loading") {
-        launchControls.appendChild(createNode("span", "launch-status", "Scanning..."));
-      } else if (launchState.status === "error") {
-        const retryButton = createPlayButton("Retry");
-        retryButton.classList.add("launch-retry-button");
-        retryButton.addEventListener("click", () => {
-          launchExecutableCache.delete(getLaunchCacheKey(folder));
-          renderInstallFolders();
-        });
-        retryButton.title = launchState.errorMessage || "Executables could not be scanned.";
-        launchControls.appendChild(retryButton);
-      } else if (launchState.executables.length === 1) {
-        const playButton = createPlayButton();
-        playButton.addEventListener("click", async () => {
-          try {
-            await window.f95App.launchExecutable({
-              gameId: selectedGame.id,
-              folderId: folder.id,
-              executablePath: launchState.executables[0].fullPath
-            });
-          } catch (error) {
-            alert(error.message);
-          }
-        });
-        launchControls.appendChild(playButton);
-      } else if (launchState.executables.length > 1) {
-        const select = createNode("select", "launch-select");
-        launchState.executables.forEach((entry) => {
-          const option = createNode("option", "", entry.fileName);
-          option.value = entry.fullPath;
-          option.selected = entry.fullPath === launchState.selectedPath;
-          select.appendChild(option);
-        });
-        select.addEventListener("change", () => {
-          launchState.selectedPath = select.value;
-        });
-        const playButton = createPlayButton();
-        playButton.addEventListener("click", async () => {
-          try {
-            await window.f95App.launchExecutable({
-              gameId: selectedGame.id,
-              folderId: folder.id,
-              executablePath: launchState.selectedPath
-            });
-          } catch (error) {
-            alert(error.message);
-          }
-        });
-        launchControls.appendChild(select);
-        launchControls.appendChild(playButton);
+      const summary = createNode("div", "install-folder-summary");
+      if (selectedGame.hasSeasons) {
+        const seasonMeta = createNode("div", "install-folder-meta");
+        seasonMeta.appendChild(createNode("span", "install-folder-meta-heading", "Season"));
+        seasonMeta.appendChild(createNode("span", "install-folder-season-label-display", formatFolderSeasonLabel(folder)));
+        summary.appendChild(seasonMeta);
       }
 
-      if (launchControls.childElementCount > 0) {
-        controls.appendChild(launchControls);
+      const versionMeta = createNode("div", "install-folder-meta");
+      versionMeta.appendChild(createNode("span", "install-folder-meta-heading", "Version"));
+      const versionLabel = createNode("span", "install-folder-version-label", formatFolderDisplayVersion(selectedGame, folder));
+      const versionTone = getFolderVersionTone(selectedGame, folder);
+      if (versionTone) {
+        versionLabel.classList.add(versionTone);
       }
+      versionMeta.appendChild(versionLabel);
+      summary.appendChild(versionMeta);
+      controls.appendChild(summary);
 
-      if (stateForFolder.editing) {
-        const editor = createNode("div", "install-folder-editor");
-        const input = createNode("input", "install-folder-input");
-        input.type = "text";
-        input.value = stateForFolder.value;
-        input.placeholder = "Enter version";
-        editor.appendChild(input);
+      const actions = createNode("div", "install-folder-actions");
 
-        const save = createNode("button", "secondary", "Save");
-        save.type = "button";
-        save.addEventListener("click", async () => {
-          try {
-            await window.f95App.updateGameFolderVersion({
-              folderId: folder.id,
-              gameId: selectedGame.id,
-              folderPath: folder.folderPath,
-              version: input.value.trim()
-            });
-            await reloadState();
-          } catch (error) {
-            alert(error.message);
-          }
-        });
-
-        const useCurrent = createNode("button", "secondary", "Use Current Version");
-        useCurrent.type = "button";
-        useCurrent.addEventListener("click", () => {
-          input.value = selectedGame.currentVersion || "";
-        });
-
-        const cancel = createNode("button", "secondary", "Cancel");
-        cancel.type = "button";
-        cancel.addEventListener("click", () => {
-          folderStates.set(folder.id, {
-            editing: false,
-            value: folder.version || ""
-          });
-          renderInstallFolders();
-        });
-
-        editor.appendChild(save);
-        editor.appendChild(useCurrent);
-        editor.appendChild(cancel);
-        controls.appendChild(editor);
-      } else {
-        const versionButton = createNode("button", "install-folder-version", formatFolderVersionLabel(folder));
-        versionButton.type = "button";
-        versionButton.addEventListener("click", () => {
-          folderStates.set(folder.id, {
-            editing: true,
-            value: folder.version || ""
-          });
-          renderInstallFolders();
-        });
-        controls.appendChild(versionButton);
-      }
-
-      const deleteButton = createNode("button", "secondary install-folder-delete", "Delete Folder");
-      deleteButton.type = "button";
-      deleteButton.addEventListener("click", async () => {
-        const confirmed = window.confirm(
-          `Delete the folder \"${folder.folderName}\" permanently?\n\n${folder.folderPath}`
-        );
-        if (!confirmed) {
-          return;
-        }
+      const playButton = createPlayButton();
+      playButton.title = "Launch the configured executable for this folder";
+      playButton.addEventListener("click", async () => {
         try {
-          await window.f95App.deleteGameFolder({
-            folderId: folder.id,
+          await window.f95App.launchExecutable({
             gameId: selectedGame.id,
-            folderPath: folder.folderPath
+            folderId: folder.id
           });
-          await reloadState();
         } catch (error) {
           alert(error.message);
         }
       });
-      controls.appendChild(deleteButton);
+      actions.appendChild(playButton);
+
+      const editButton = createNode("button", "secondary install-folder-edit", "Edit");
+      editButton.type = "button";
+      editButton.title = "Open folder settings";
+      editButton.addEventListener("click", () => {
+        state.editingFolderId = folder.id;
+        state.openOverlay = "edit-folder";
+        render();
+      });
+      actions.appendChild(editButton);
+      controls.appendChild(actions);
 
       row.appendChild(info);
       row.appendChild(controls);
@@ -578,6 +507,141 @@ function buildGameDetailsCard(selectedGame) {
   }
 
   return card;
+}
+
+function getSelectedGame() {
+  return state.games.find((game) => game.id === state.selectedGameId) || null;
+}
+
+function getEditingFolderContext() {
+  const game = getSelectedGame();
+  if (!game || !state.editingFolderId) {
+    return { game: null, folder: null };
+  }
+  const folder = (game.folders || []).find((entry) => entry.id === state.editingFolderId) || null;
+  return { game, folder };
+}
+
+function renderEditFolderPanel() {
+  const panel = $("#edit-folder-panel");
+  const form = $("#edit-folder-form");
+  if (!panel || !form) {
+    return;
+  }
+
+  const { game, folder } = getEditingFolderContext();
+  if (!game || !folder || state.openOverlay !== "edit-folder") {
+    return;
+  }
+
+  $("#edit-folder-panel-title").textContent = `${game.title} - ${folder.folderName}`;
+  $("#edit-folder-panel-subtitle").textContent = `Choose what Play launches, set version details, and manage season metadata for ${folder.folderName}.`;
+  $("#edit-folder-name").textContent = folder.folderName;
+  $("#edit-folder-path").textContent = folder.folderPath;
+
+  const executableSelect = $("#edit-folder-executable");
+  const versionInput = $("#edit-folder-version");
+  const useCurrentButton = $("#edit-folder-use-current");
+  const seasonsCheckbox = $("#edit-folder-seasons-checkbox");
+  const seasonFields = $("#edit-folder-season-fields");
+  const seasonSelect = $("#edit-folder-season");
+  const seasonFinalCheckbox = $("#edit-folder-season-final");
+  const deleteButton = $("#edit-folder-delete");
+
+  versionInput.value = folder.version || "";
+  seasonsCheckbox.checked = Boolean(game.hasSeasons);
+  seasonFields.classList.toggle("hidden", !game.hasSeasons);
+  seasonSelect.innerHTML = "";
+  const emptyOption = createNode("option", "", "No season");
+  emptyOption.value = "";
+  seasonSelect.appendChild(emptyOption);
+  for (let season = 1; season <= 10; season += 1) {
+    const option = createNode("option", "", String(season));
+    option.value = String(season);
+    option.selected = Number(folder.seasonNumber) === season;
+    seasonSelect.appendChild(option);
+  }
+  seasonFinalCheckbox.checked = Boolean(folder.seasonFinal);
+
+  const launchState = ensureFolderLaunchState(game, folder, renderEditFolderPanel);
+  executableSelect.innerHTML = "";
+  executableSelect.disabled = launchState.status === "loading" || launchState.executables.length === 0;
+  if (launchState.status === "loading") {
+    const option = createNode("option", "", "Scanning...");
+    option.value = "";
+    executableSelect.appendChild(option);
+  } else if (launchState.executables.length === 0) {
+    const option = createNode("option", "", "No executable found");
+    option.value = "";
+    executableSelect.appendChild(option);
+  } else {
+    const selectedPath =
+      launchState.executables.find((entry) => entry.isSelected)?.fullPath ||
+      folder.preferredExePath ||
+      launchState.executables.find((entry) => entry.isRecommended)?.fullPath ||
+      launchState.executables[0].fullPath;
+    launchState.selectedPath = selectedPath;
+    launchState.executables.forEach((entry) => {
+      const suffix = entry.isSelected ? " - selected" : entry.isRecommended ? " - recommended" : "";
+      const option = createNode("option", "", `${entry.fileName}${suffix}`);
+      option.value = entry.fullPath;
+      option.selected = entry.fullPath === selectedPath;
+      executableSelect.appendChild(option);
+    });
+  }
+
+  seasonsCheckbox.onchange = () => {
+    seasonFields.classList.toggle("hidden", !seasonsCheckbox.checked);
+  };
+
+  useCurrentButton.onclick = () => {
+    versionInput.value = game.currentVersion || "";
+  };
+
+  deleteButton.onclick = async () => {
+    const confirmed = window.confirm(`Delete the folder "${folder.folderName}" permanently?\n\n${folder.folderPath}`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await window.f95App.deleteGameFolder({
+        folderId: folder.id,
+        gameId: game.id,
+        folderPath: folder.folderPath
+      });
+      state.editingFolderId = null;
+      state.openOverlay = null;
+      await reloadState();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      if (Boolean(game.hasSeasons) !== Boolean(seasonsCheckbox.checked)) {
+        await window.f95App.updateGameSeasons({
+          gameId: game.id,
+          hasSeasons: seasonsCheckbox.checked
+        });
+      }
+      await window.f95App.updateGameFolderMetadata({
+        folderId: folder.id,
+        gameId: game.id,
+        folderPath: folder.folderPath,
+        version: versionInput.value.trim(),
+        seasonNumber: seasonsCheckbox.checked && seasonSelect.value ? Number(seasonSelect.value) : null,
+        seasonFinal: seasonsCheckbox.checked ? seasonFinalCheckbox.checked : false,
+        preferredExePath: executableSelect.value || null
+      });
+      state.editingFolderId = null;
+      state.openOverlay = null;
+      await reloadState();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
 }
 
 function renderGames() {
@@ -770,6 +834,7 @@ function render() {
   renderOverlays();
   renderStats();
   renderGames();
+  renderEditFolderPanel();
   renderJobs();
 }
 
@@ -787,6 +852,12 @@ async function reloadState() {
       pruneLaunchExecutableCache(state.games);
       if (!state.games.some((game) => game.id === state.selectedGameId)) {
         state.selectedGameId = null;
+      }
+      if (!state.games.some((game) => (game.folders || []).some((folder) => folder.id === state.editingFolderId))) {
+        state.editingFolderId = null;
+        if (state.openOverlay === "edit-folder") {
+          state.openOverlay = null;
+        }
       }
       render();
     } while (reloadStateQueued);
@@ -943,11 +1014,13 @@ async function initialize() {
   });
   $("#overlay-backdrop").addEventListener("click", () => {
     state.openOverlay = null;
+    state.editingFolderId = null;
     renderOverlays();
   });
   document.querySelectorAll("[data-close-overlay]").forEach((button) => {
     button.addEventListener("click", () => {
       state.openOverlay = null;
+      state.editingFolderId = null;
       renderOverlays();
     });
   });
@@ -956,6 +1029,7 @@ async function initialize() {
     if (event.key === "Escape") {
       if (state.openOverlay) {
         state.openOverlay = null;
+        state.editingFolderId = null;
         renderOverlays();
       }
       closeLightbox();

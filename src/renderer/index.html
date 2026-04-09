@@ -147,6 +147,65 @@
       </form>
     </section>
 
+    <section id="edit-folder-panel" class="overlay-panel overlay-panel-centered hidden" role="dialog" aria-modal="true" aria-labelledby="edit-folder-panel-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow">Install Folder</p>
+          <h3 id="edit-folder-panel-title">Edit Install Folder</h3>
+          <p id="edit-folder-panel-subtitle" class="overlay-panel-subtitle">Adjust launch, version, and season settings for this installation.</p>
+        </div>
+      </div>
+      <form id="edit-folder-form" class="overlay-form">
+        <div class="content-block edit-folder-section">
+          <h5 class="content-heading">Folder</h5>
+          <p id="edit-folder-name" class="install-folder-name"></p>
+          <p id="edit-folder-path" class="install-folder-path"></p>
+        </div>
+        <div class="content-block edit-folder-section">
+          <h5 class="content-heading">Launch</h5>
+          <label>
+            Play Executable
+            <select id="edit-folder-executable"></select>
+          </label>
+          <p class="field-hint">This is the file the Play button will start for this folder.</p>
+        </div>
+        <div class="content-block edit-folder-section">
+          <h5 class="content-heading">Version</h5>
+          <label>
+            Version Number
+            <input id="edit-folder-version" type="text" placeholder="Enter version" />
+          </label>
+          <button id="edit-folder-use-current" class="secondary" type="button">Use Current Version</button>
+        </div>
+        <div class="content-block edit-folder-section">
+          <h5 class="content-heading">Seasons</h5>
+          <label class="install-seasons-toggle">
+            <input id="edit-folder-seasons-checkbox" class="install-seasons-checkbox" type="checkbox" />
+            <span>Seasons</span>
+          </label>
+          <p class="field-hint">This setting applies to the whole game, not just this folder.</p>
+          <div id="edit-folder-season-fields" class="edit-folder-season-fields hidden">
+            <label>
+              Season
+              <select id="edit-folder-season"></select>
+            </label>
+            <label class="install-folder-season-final">
+              <input id="edit-folder-season-final" class="install-folder-season-final-checkbox" type="checkbox" />
+              <span>Season Final</span>
+            </label>
+          </div>
+        </div>
+        <div class="content-block edit-folder-section danger-block">
+          <h5 class="content-heading">Danger</h5>
+          <button id="edit-folder-delete" class="secondary danger-button" type="button">Delete Folder</button>
+        </div>
+        <div class="actions overlay-form-actions">
+          <button class="secondary" type="button" data-close-overlay>Cancel</button>
+          <button class="primary" type="submit">Save</button>
+        </div>
+      </form>
+    </section>
+
     <template id="game-card-template">
       <article class="game-tile">
         <button class="game-tile-button" type="button">

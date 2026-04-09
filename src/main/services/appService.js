@@ -140,7 +140,8 @@ class AppService {
         folders[0];
       await this.db.updateGameFolderVersion(targetFolder.id, normalized, "manual");
       const nextFolders = this.db.listGameFolders(game.id);
-      const updatedGame = await this.db.applyDerivedInstallState(game.id, nextFolders, {
+      const rankedFolders = await this.db.recalculateGameFolderRanks(game.id, { game, folders: nextFolders });
+      const updatedGame = await this.db.applyDerivedInstallState(game.id, rankedFolders, {
         installPath: game.installPath || null
       });
       this.emitChange();
@@ -191,10 +192,72 @@ class AppService {
     }
 
     await this.db.updateGameFolderVersion(folder.id, sanitizeVersion(version) || null, "manual");
-    const folders = this.db.listGameFolders(folder.gameId);
+    const game = this.db.getGameById(folder.gameId);
+    const folders = await this.db.recalculateGameFolderRanks(folder.gameId, { game });
     await this.db.applyDerivedInstallState(folder.gameId, folders, {
-      installPath: this.db.getGameById(folder.gameId)?.installPath || null
+      installPath: game?.installPath || null
     });
+    this.emitChange();
+    return this.db.getGameById(folder.gameId);
+  }
+
+  async updateGameSeasons(gameId, hasSeasons) {
+    const game = this.db.getGameById(Number(gameId));
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    const updatedGame = await this.db.updateGameSeasons(game.id, Boolean(hasSeasons));
+    const folders = await this.db.recalculateGameFolderRanks(game.id, { game: updatedGame });
+    await this.db.applyDerivedInstallState(game.id, folders, {
+      installPath: updatedGame.installPath || null
+    });
+    this.emitChange();
+    return this.db.getGameById(game.id);
+  }
+
+  async updateGameFolderMetadata(folderRef, updates = {}) {
+    const folder = this.resolveFolderReference(folderRef);
+    if (!folder) {
+      throw new Error("Game folder not found.");
+    }
+    const previousSeasonNumber = folder.seasonNumber ?? null;
+    const nextVersion = Object.prototype.hasOwnProperty.call(updates, "version")
+      ? sanitizeVersion(updates.version) || null
+      : undefined;
+
+    const seasonNumberRaw = Object.prototype.hasOwnProperty.call(updates, "seasonNumber")
+      ? updates.seasonNumber
+      : undefined;
+    const seasonNumber =
+      seasonNumberRaw === undefined || seasonNumberRaw === null || seasonNumberRaw === ""
+        ? null
+        : Number(seasonNumberRaw);
+
+    if (seasonNumber !== null && (!Number.isInteger(seasonNumber) || seasonNumber < 1 || seasonNumber > 10)) {
+      throw new Error("Season must be between 1 and 10.");
+    }
+
+    await this.db.updateGameFolderMetadata(folder.id, {
+      version: nextVersion,
+      versionSource: nextVersion !== undefined ? "manual" : undefined,
+      seasonNumber,
+      seasonFinal: Object.prototype.hasOwnProperty.call(updates, "seasonFinal")
+        ? Boolean(updates.seasonFinal)
+        : undefined,
+      preferredExePath: Object.prototype.hasOwnProperty.call(updates, "preferredExePath")
+        ? updates.preferredExePath || null
+        : undefined
+    });
+
+    if (previousSeasonNumber !== seasonNumber || nextVersion !== undefined) {
+      const game = this.db.getGameById(folder.gameId);
+      const folders = await this.db.recalculateGameFolderRanks(folder.gameId, { game });
+      await this.db.applyDerivedInstallState(folder.gameId, folders, {
+        installPath: game?.installPath || null
+      });
+    }
+
     this.emitChange();
     return this.db.getGameById(folder.gameId);
   }
@@ -249,12 +312,43 @@ class AppService {
         title: game.title,
         threadTitle: game.threadTitle,
         aliases: game.aliases
-      })
+      }).map((entry) => ({
+        ...entry,
+        isSelected: Boolean(folder.preferredExePath && path.resolve(folder.preferredExePath) === path.resolve(entry.fullPath))
+      }))
     };
   }
 
+  async resolveLaunchExecutablePath(folder, executablePathArg) {
+    const listed = await this.listLaunchExecutables({ folderId: folder.id });
+    const executables = listed.executables || [];
+    if (!executables.length) {
+      throw new Error("No executable was found in this game folder.");
+    }
+
+    const requestedPath = executablePathArg ? path.resolve(String(executablePathArg)) : "";
+    const preferredPath = folder.preferredExePath ? path.resolve(String(folder.preferredExePath)) : "";
+    const selectedExecutable =
+      executables.find((entry) => requestedPath && path.resolve(entry.fullPath) === requestedPath) ||
+      executables.find((entry) => preferredPath && path.resolve(entry.fullPath) === preferredPath) ||
+      executables.find((entry) => entry.isRecommended) ||
+      executables[0];
+
+    if (!selectedExecutable) {
+      throw new Error("No executable was found in this game folder.");
+    }
+
+    if (!folder.preferredExePath || path.resolve(folder.preferredExePath) !== path.resolve(selectedExecutable.fullPath)) {
+      await this.db.updateGameFolderMetadata(folder.id, {
+        preferredExePath: selectedExecutable.fullPath
+      });
+    }
+
+    return selectedExecutable.fullPath;
+  }
+
   async launchExecutable(folderRef, executablePathArg) {
-    const executablePath =
+    const requestedExecutablePath =
       folderRef && typeof folderRef === "object" ? folderRef.executablePath : executablePathArg;
     const folder = this.resolveFolderReference(folderRef);
     if (!folder) {
@@ -262,6 +356,19 @@ class AppService {
     }
 
     const resolvedFolderPath = path.resolve(folder.folderPath);
+    if (requestedExecutablePath) {
+      const requestedResolvedPath = path.resolve(String(requestedExecutablePath));
+      const relativeRequestedPath = path.relative(resolvedFolderPath, requestedResolvedPath);
+      if (
+        !relativeRequestedPath ||
+        relativeRequestedPath.startsWith("..") ||
+        path.isAbsolute(relativeRequestedPath) ||
+        relativeRequestedPath.includes(path.sep)
+      ) {
+        throw new Error("Executable must be located directly inside the selected game folder.");
+      }
+    }
+    const executablePath = await this.resolveLaunchExecutablePath(folder, requestedExecutablePath);
     const resolvedExecutablePath = path.resolve(String(executablePath || ""));
     if (!resolvedExecutablePath || path.extname(resolvedExecutablePath).toLowerCase() !== ".exe") {
       throw new Error("Executable path is invalid.");
@@ -802,6 +909,9 @@ class AppService {
         folderPath: resolvedPath,
         version: isManual ? existing.version : inferredVersion,
         versionSource: isManual ? "manual" : "inferred",
+        seasonNumber: existing?.seasonNumber ?? null,
+        seasonFinal: existing?.seasonFinal ?? false,
+        preferredExePath: existing?.preferredExePath ?? null,
         createdAt: existing?.createdAt,
         updatedAt: existing?.updatedAt
       };
@@ -811,21 +921,37 @@ class AppService {
       folderPath: path.resolve(folder.folderPath),
       folderName: folder.folderName,
       version: folder.version,
-      versionSource: folder.versionSource
+      versionSource: folder.versionSource,
+      seasonNumber: folder.seasonNumber,
+      seasonFinal: folder.seasonFinal,
+      sortRank: folder.sortRank
     }));
     const beforeGame = this.db.getGameById(game.id);
 
     await this.db.replaceGameFolders(game.id, nextFolders);
     const syncedFolders = this.db.listGameFolders(game.id);
-    const updatedGame = await this.db.applyDerivedInstallState(game.id, syncedFolders, {
+    const missingRanks = syncedFolders.some((folder) => !Number.isFinite(Number(folder.sortRank)));
+    const changedMembership =
+      beforeFolders.length !== syncedFolders.length ||
+      beforeFolders.some((folder) => !syncedFolders.some((entry) => entry.folderPath === folder.folderPath));
+    const rankedFolders = missingRanks || changedMembership
+      ? await this.db.recalculateGameFolderRanks(game.id, {
+          game: this.db.getGameById(game.id),
+          folders: syncedFolders
+        })
+      : syncedFolders;
+    const updatedGame = await this.db.applyDerivedInstallState(game.id, rankedFolders, {
       installPath: nextFolders[0]?.folderPath || null
     });
 
-    const afterFolders = syncedFolders.map((folder) => ({
+    const afterFolders = rankedFolders.map((folder) => ({
       folderPath: path.resolve(folder.folderPath),
       folderName: folder.folderName,
       version: folder.version,
-      versionSource: folder.versionSource
+      versionSource: folder.versionSource,
+      seasonNumber: folder.seasonNumber,
+      seasonFinal: folder.seasonFinal,
+      sortRank: folder.sortRank
     }));
 
     return (

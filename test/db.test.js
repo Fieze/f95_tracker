@@ -23,6 +23,14 @@ test("database migration creates the game_folders table", async (t) => {
 
   const tables = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'game_folders'");
   assert.equal(tables.length, 1);
+
+  const gameColumns = db.query("PRAGMA table_info(games)");
+  const folderColumns = db.query("PRAGMA table_info(game_folders)");
+  assert.equal(gameColumns.some((column) => column.name === "has_seasons"), true);
+  assert.equal(folderColumns.some((column) => column.name === "season_number"), true);
+  assert.equal(folderColumns.some((column) => column.name === "season_final"), true);
+  assert.equal(folderColumns.some((column) => column.name === "preferred_exe_path"), true);
+  assert.equal(folderColumns.some((column) => column.name === "sort_rank"), true);
 });
 
 test("applyDerivedInstallState hydrates folders into the game object", async (t) => {
@@ -163,9 +171,12 @@ test("exportSnapshot and importSnapshot round-trip settings and games", async (t
       folderName: "Backup Game-1.0",
       folderPath: "D:\\Games\\Backup Game\\Backup Game-1.0",
       version: "1.0",
-      versionSource: "inferred"
+      versionSource: "inferred",
+      seasonNumber: 2,
+      seasonFinal: true
     }
   ]);
+  await db.updateGameSeasons(game.id, true);
 
   const snapshot = db.exportSnapshot();
 
@@ -183,6 +194,9 @@ test("exportSnapshot and importSnapshot round-trip settings and games", async (t
   assert.equal(importedSettings.syncIntervalMinutes, 45);
   assert.equal(importedGames.length, 1);
   assert.equal(importedGames[0].title, "Backup Game");
+  assert.equal(importedGames[0].hasSeasons, true);
   assert.equal(importedGames[0].downloadGroups[0].links[0].label, "Mega");
   assert.equal(importedGames[0].folders[0].version, "1.0");
+  assert.equal(importedGames[0].folders[0].seasonNumber, 2);
+  assert.equal(importedGames[0].folders[0].seasonFinal, true);
 });

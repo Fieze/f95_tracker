@@ -225,12 +225,28 @@ h1 {
   display: none;
 }
 
+.overlay-panel-centered {
+  top: 50%;
+  right: auto;
+  left: 50%;
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  transform: translate(-50%, -50%);
+}
+
 .overlay-panel-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.overlay-panel-subtitle {
+  margin-top: 8px;
+  max-width: 42ch;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .overlay-panel-status-row {
@@ -631,20 +647,46 @@ button:hover,
   gap: 10px;
 }
 
+.install-seasons-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.edit-folder-season-fields.hidden {
+  display: none;
+}
+
+.install-seasons-checkbox,
+.install-folder-season-final-checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
 .install-folder-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
-  padding: 14px;
-  border-radius: 16px;
-  background: rgba(7, 12, 12, 0.42);
-  border: 1px solid rgba(171, 204, 191, 0.08);
+  padding: 15px 16px;
+  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(8, 13, 13, 0.58), rgba(17, 27, 26, 0.48));
+  border: 1px solid rgba(171, 204, 191, 0.09);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.install-folder-row:hover {
+  border-color: rgba(171, 204, 191, 0.16);
+  background: linear-gradient(160deg, rgba(11, 18, 17, 0.66), rgba(20, 31, 30, 0.56));
 }
 
 .install-folder-row.is-primary {
   border-color: rgba(226, 176, 76, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(226, 176, 76, 0.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(226, 176, 76, 0.12),
+    0 14px 28px rgba(0, 0, 0, 0.14);
 }
 
 .install-folder-info {
@@ -667,8 +709,89 @@ button:hover,
 .install-folder-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 18px;
   justify-content: flex-end;
+  align-items: center;
+}
+
+.install-folder-summary {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(96px, max-content);
+  gap: 16px;
+  align-items: start;
+  justify-content: end;
+}
+
+.install-folder-meta {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  align-content: start;
+  min-width: 0;
+}
+
+.install-folder-meta-heading {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.install-folder-season-label-display {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  min-width: 54px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(233, 245, 239, 0.07);
+  border: 1px solid rgba(171, 204, 191, 0.14);
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.install-folder-version-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  min-width: 92px;
+  max-width: 100%;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(226, 176, 76, 0.12);
+  border: 1px solid rgba(226, 176, 76, 0.18);
+  color: var(--accent-strong);
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.install-folder-version-label.is-latest {
+  background: linear-gradient(135deg, rgba(226, 176, 76, 0.2), rgba(245, 206, 123, 0.12));
+  border-color: rgba(245, 206, 123, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.install-folder-version-label.is-empty {
+  background: rgba(233, 245, 239, 0.06);
+  border-color: rgba(171, 204, 191, 0.12);
+  color: var(--muted);
+}
+
+.install-folder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding-left: 18px;
+  margin-left: 2px;
+  border-left: 1px solid rgba(171, 204, 191, 0.16);
 }
 
 .install-folder-launch {
@@ -692,6 +815,7 @@ button:hover,
 .launch-button {
   gap: 8px;
   white-space: nowrap;
+  min-width: 92px;
 }
 
 .launch-button svg {
@@ -713,6 +837,35 @@ button:hover,
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.install-folder-season-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.install-folder-season-label,
+.install-folder-season-final {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.install-folder-season-label {
+  flex-wrap: wrap;
+}
+
+.install-folder-season-text {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.install-folder-season-select {
+  min-width: 120px;
 }
 
 .install-folder-input {
@@ -803,9 +956,45 @@ button:hover,
   align-self: center;
 }
 
+.danger-block {
+  border-color: rgba(221, 108, 100, 0.14);
+  background: linear-gradient(160deg, rgba(31, 12, 11, 0.44), rgba(27, 15, 15, 0.36));
+}
+
+.danger-button {
+  background: rgba(221, 108, 100, 0.18);
+  color: #ffd3cf;
+}
+
+.danger-button:hover {
+  background: rgba(221, 108, 100, 0.24);
+}
+
+.overlay-form-actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: 4px;
+  margin-top: 4px;
+  background: linear-gradient(180deg, rgba(13, 21, 20, 0), rgba(13, 21, 20, 0.94) 32%);
+}
+
 .content-block {
   display: grid;
   gap: 8px;
+}
+
+.edit-folder-section {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(9, 16, 15, 0.58), rgba(19, 30, 29, 0.5));
+  border: 1px solid rgba(171, 204, 191, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
 }
 
 .meta-label {
@@ -967,5 +1156,47 @@ button:hover,
     right: 12px;
     width: calc(100vw - 24px);
     max-height: calc(100vh - 96px);
+  }
+
+  .install-folder-row {
+    grid-template-columns: 1fr;
+  }
+
+  .install-folder-controls,
+  .install-folder-launch,
+  .install-folder-season-controls,
+  .install-folder-editor {
+    justify-content: flex-start;
+  }
+
+  .install-folder-summary {
+    justify-content: flex-start;
+  }
+
+  .install-folder-actions {
+    padding-left: 0;
+    margin-left: 0;
+    border-left: 0;
+  }
+
+  .install-folder-meta {
+    min-width: 0;
+  }
+
+  .overlay-panel-centered {
+    top: 24px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-height: calc(100vh - 48px);
+    transform: none;
+  }
+
+  .overlay-form-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .overlay-form-actions button {
+    width: 100%;
   }
 }

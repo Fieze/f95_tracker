@@ -9,6 +9,7 @@ const {
   deriveInstalledStateFromFolders,
   isExpectedGameInstallPath,
   normalizeThreadUrl,
+  rankGameFolders,
   rankLaunchExecutables,
   versionLabel
 } = require("../src/main/services/utils");
@@ -121,4 +122,44 @@ test("rankLaunchExecutables can fall back to aliases when the title is absent", 
 
   assert.equal(ranked[0].fileName, "AFH.exe");
   assert.equal(ranked[0].isRecommended, true);
+});
+
+test("rankGameFolders orders versions descending without seasons", () => {
+  const ranked = rankGameFolders(
+    [
+      { id: 1, folderName: "Game-0.8", version: "0.8", sortRank: 2 },
+      { id: 2, folderName: "Game-1.0", version: "1.0", sortRank: 3 },
+      { id: 3, folderName: "Game-0.9", version: "0.9", sortRank: 1 }
+    ],
+    { hasSeasons: false }
+  );
+
+  assert.deepEqual(ranked.map((folder) => folder.id), [2, 3, 1]);
+  assert.deepEqual(ranked.map((folder) => folder.sortRank), [1, 2, 3]);
+});
+
+test("rankGameFolders orders seasons as highest then ascending from the first", () => {
+  const ranked = rankGameFolders(
+    [
+      { id: 1, folderName: "S1-1.0", version: "1.0", seasonNumber: 1, sortRank: 1 },
+      { id: 2, folderName: "S4-1.0", version: "1.0", seasonNumber: 4, sortRank: 2 },
+      { id: 3, folderName: "S2-1.0", version: "1.0", seasonNumber: 2, sortRank: 3 },
+      { id: 4, folderName: "S3-1.0", version: "1.0", seasonNumber: 3, sortRank: 4 }
+    ],
+    { hasSeasons: true }
+  );
+
+  assert.deepEqual(ranked.map((folder) => folder.seasonNumber), [4, 1, 2, 3]);
+});
+
+test("rankGameFolders keeps stable order for equal or missing versions", () => {
+  const ranked = rankGameFolders(
+    [
+      { id: 1, folderName: "Game-A", version: null, sortRank: 2 },
+      { id: 2, folderName: "Game-B", version: null, sortRank: 1 }
+    ],
+    { hasSeasons: false }
+  );
+
+  assert.deepEqual(ranked.map((folder) => folder.id), [2, 1]);
 });

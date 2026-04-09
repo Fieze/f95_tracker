@@ -1,7 +1,7 @@
 const fs = require("fs/promises");
 const path = require("path");
 const initSqlJs = require("sql.js");
-const { deriveInstalledStateFromFolders, safeJsonParse, versionLabel } = require("./utils");
+const { deriveInstalledStateFromFolders, rankGameFolders, safeJsonParse, versionLabel } = require("./utils");
 
 class DatabaseService {
   constructor(userDataPath) {
@@ -50,6 +50,7 @@ class DatabaseService {
         thread_url TEXT UNIQUE NOT NULL,
         title TEXT NOT NULL,
         thread_title TEXT,
+        has_seasons INTEGER NOT NULL DEFAULT 0,
         current_version TEXT,
         installed_version TEXT,
         install_path TEXT,
@@ -115,6 +116,10 @@ class DatabaseService {
         folder_path TEXT NOT NULL,
         version TEXT,
         version_source TEXT NOT NULL DEFAULT 'inferred',
+        season_number INTEGER,
+        season_final INTEGER NOT NULL DEFAULT 0,
+        preferred_exe_path TEXT,
+        sort_rank INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(game_id, folder_path),
@@ -128,6 +133,11 @@ class DatabaseService {
     this.ensureColumn("games", "screenshot_images", "TEXT DEFAULT '[]'");
     this.ensureColumn("games", "thread_status", "TEXT");
     this.ensureColumn("games", "install_path", "TEXT");
+    this.ensureColumn("games", "has_seasons", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("game_folders", "season_number", "INTEGER");
+    this.ensureColumn("game_folders", "season_final", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("game_folders", "preferred_exe_path", "TEXT");
+    this.ensureColumn("game_folders", "sort_rank", "INTEGER");
   }
 
   ensureColumn(tableName, columnName, definition) {
@@ -178,13 +188,14 @@ class DatabaseService {
 
     const stmt = this.db.prepare(`
       INSERT INTO games (
-        id, thread_url, title, thread_title, current_version, developer, engine, thread_status, overview, release_date, changelog,
+        id, thread_url, title, thread_title, has_seasons, current_version, developer, engine, thread_status, overview, release_date, changelog,
         banner_image_path, screenshot_images, tags,
         aliases, raw_op_html, raw_op_text, parser_debug, parser_warnings, last_sync_at, last_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(thread_url) DO UPDATE SET
         title = excluded.title,
         thread_title = excluded.thread_title,
+        has_seasons = COALESCE(games.has_seasons, excluded.has_seasons),
         current_version = excluded.current_version,
         developer = excluded.developer,
         engine = excluded.engine,
@@ -209,6 +220,7 @@ class DatabaseService {
       parsedThread.sourceUrl,
       parsedThread.title,
       parsedThread.threadTitle,
+      parsedThread.hasSeasons ? 1 : 0,
       parsedThread.currentVersion,
       parsedThread.developer,
       parsedThread.engine,
@@ -267,7 +279,7 @@ class DatabaseService {
   getGames() {
     const rows = this.query("SELECT * FROM games ORDER BY title COLLATE NOCASE ASC");
     const links = this.query("SELECT * FROM download_links ORDER BY group_label, label");
-    const folders = this.query("SELECT * FROM game_folders ORDER BY updated_at DESC, folder_name COLLATE NOCASE ASC");
+    const folders = this.query("SELECT * FROM game_folders ORDER BY sort_rank ASC, id ASC");
     const linksByGame = this.groupRowsByKey(links, "game_id");
     const foldersByGame = this.groupRowsByKey(folders, "game_id");
 
@@ -278,18 +290,14 @@ class DatabaseService {
     const row = this.first("SELECT * FROM games WHERE id = ?", [gameId]);
     if (!row) return null;
     const links = this.query("SELECT * FROM download_links WHERE game_id = ? ORDER BY group_label, label", [gameId]);
-    const folders = this.query(
-      "SELECT * FROM game_folders WHERE game_id = ? ORDER BY updated_at DESC, folder_name COLLATE NOCASE ASC",
-      [gameId]
-    );
+    const folders = this.query("SELECT * FROM game_folders WHERE game_id = ? ORDER BY sort_rank ASC, id ASC", [gameId]);
     return this.hydrateGame(row, links, folders);
   }
 
   listGameFolders(gameId) {
-    return this.query(
-      "SELECT * FROM game_folders WHERE game_id = ? ORDER BY updated_at DESC, folder_name COLLATE NOCASE ASC",
-      [gameId]
-    ).map((row) => this.hydrateFolder(row));
+    return this.query("SELECT * FROM game_folders WHERE game_id = ? ORDER BY sort_rank ASC, id ASC", [gameId]).map((row) =>
+      this.hydrateFolder(row)
+    );
   }
 
   getGameFolder(folderId) {
@@ -309,17 +317,25 @@ class DatabaseService {
     const now = new Date().toISOString();
     const existing = this.first("SELECT * FROM game_folders WHERE game_id = ? AND folder_path = ?", [gameId, folder.folderPath]);
     const versionSource = folder.versionSource || existing?.version_source || "inferred";
+    const seasonNumber = folder.seasonNumber ?? existing?.season_number ?? null;
+    const seasonFinal = folder.seasonFinal ?? Boolean(existing?.season_final);
+    const preferredExePath = folder.preferredExePath ?? existing?.preferred_exe_path ?? null;
+    const sortRank = folder.sortRank ?? existing?.sort_rank ?? null;
 
     if (existing) {
       this.db.run(
         `UPDATE game_folders SET
-          folder_name = ?, folder_path = ?, version = ?, version_source = ?, updated_at = ?
+          folder_name = ?, folder_path = ?, version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, sort_rank = ?, updated_at = ?
         WHERE id = ?`,
         [
           folder.folderName,
           folder.folderPath,
           folder.version ?? null,
           versionSource,
+          seasonNumber,
+          seasonFinal ? 1 : 0,
+          preferredExePath,
+          sortRank,
           now,
           existing.id
         ]
@@ -327,14 +343,18 @@ class DatabaseService {
     } else {
       this.db.run(
         `INSERT INTO game_folders (
-          game_id, folder_name, folder_path, version, version_source, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          game_id, folder_name, folder_path, version, version_source, season_number, season_final, preferred_exe_path, sort_rank, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
         [
           gameId,
           folder.folderName,
           folder.folderPath,
           folder.version ?? null,
           versionSource,
+          seasonNumber,
+          seasonFinal ? 1 : 0,
+          preferredExePath,
+          sortRank,
           now,
           now
         ]
@@ -351,6 +371,72 @@ class DatabaseService {
     this.db.run(
       "UPDATE game_folders SET version = ?, version_source = ?, updated_at = ? WHERE id = ?",
       [version ?? null, versionSource, new Date().toISOString(), folderId]
+    );
+    await this.persist();
+    return this.getGameFolder(folderId);
+  }
+
+  async updateGameFolderSortRanks(gameId, rankedFolders) {
+    const stmt = this.db.prepare("UPDATE game_folders SET sort_rank = ?, updated_at = ? WHERE id = ?");
+    const updatedAt = new Date().toISOString();
+    for (const folder of rankedFolders || []) {
+      stmt.run([folder.sortRank ?? null, updatedAt, folder.id]);
+    }
+    stmt.free();
+    await this.persist();
+    return this.listGameFolders(gameId);
+  }
+
+  async recalculateGameFolderRanks(gameId, options = {}) {
+    const game = options.game || this.getGameById(gameId);
+    if (!game) {
+      return [];
+    }
+
+    const folders = options.folders || this.listGameFolders(gameId);
+    const rankedFolders = rankGameFolders(folders, { hasSeasons: game.hasSeasons });
+    return this.updateGameFolderSortRanks(game.id, rankedFolders);
+  }
+
+  async updateGameSeasons(gameId, hasSeasons) {
+    this.db.run("UPDATE games SET has_seasons = ? WHERE id = ?", [hasSeasons ? 1 : 0, gameId]);
+    await this.persist();
+    return this.getGameById(gameId);
+  }
+
+  async updateGameFolderMetadata(folderId, updates = {}) {
+    const existing = this.first("SELECT * FROM game_folders WHERE id = ?", [folderId]);
+    if (!existing) {
+      throw new Error("Game folder not found.");
+    }
+
+    const nextVersion = Object.prototype.hasOwnProperty.call(updates, "version")
+      ? updates.version ?? null
+      : existing.version;
+    const nextVersionSource = updates.versionSource || existing.version_source || "manual";
+    const nextSeasonNumber = Object.prototype.hasOwnProperty.call(updates, "seasonNumber")
+      ? updates.seasonNumber ?? null
+      : existing.season_number;
+    const nextSeasonFinal = Object.prototype.hasOwnProperty.call(updates, "seasonFinal")
+      ? (updates.seasonFinal ? 1 : 0)
+      : existing.season_final;
+    const nextPreferredExePath = Object.prototype.hasOwnProperty.call(updates, "preferredExePath")
+      ? updates.preferredExePath ?? null
+      : existing.preferred_exe_path;
+
+    this.db.run(
+      `UPDATE game_folders SET
+        version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, updated_at = ?
+      WHERE id = ?`,
+      [
+        nextVersion,
+        nextVersionSource,
+        nextSeasonNumber,
+        nextSeasonFinal,
+        nextPreferredExePath,
+        new Date().toISOString(),
+        folderId
+      ]
     );
     await this.persist();
     return this.getGameFolder(folderId);
@@ -377,7 +463,17 @@ class DatabaseService {
     }
 
     await this.persist();
-    return this.listGameFolders(gameId);
+    const refreshedFolders = this.listGameFolders(gameId);
+    const missingRanks = refreshedFolders.some((folder) => !Number.isFinite(Number(folder.sortRank)));
+    const changedMembership =
+      existingFolders.length !== refreshedFolders.length ||
+      existingFolders.some((folder) => !nextPaths.has(folder.folderPath));
+
+    if (missingRanks || changedMembership) {
+      return this.recalculateGameFolderRanks(gameId);
+    }
+
+    return refreshedFolders;
   }
 
   async applyDerivedInstallState(gameId, folders, fallback = {}) {
@@ -525,6 +621,7 @@ class DatabaseService {
       threadUrl: row.thread_url,
       title: row.title,
       threadTitle: row.thread_title || row.title,
+      hasSeasons: Boolean(row.has_seasons),
       currentVersion: row.current_version,
       installedVersion: derived.installedVersion ?? row.installed_version,
       installPath: derived.installPath ?? row.install_path,
@@ -561,6 +658,10 @@ class DatabaseService {
       folderPath: row.folder_path,
       version: row.version,
       versionSource: row.version_source || "inferred",
+      seasonNumber: row.season_number ?? null,
+      seasonFinal: Boolean(row.season_final),
+      preferredExePath: row.preferred_exe_path || null,
+      sortRank: row.sort_rank ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
