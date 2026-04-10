@@ -5,11 +5,14 @@ const { Logger } = require("./services/logger");
 
 let mainWindow;
 let loginWindow;
+let downloadWindow;
+let downloadWindowState = null;
 let appService;
 let logger;
 let tray;
 let isQuitting = false;
 const AUTH_PARTITION = "persist:f95-auth";
+const DOWNLOAD_PARTITION = "persist:f95-downloads";
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.ico")
   : path.join(__dirname, "..", "..", "resources", "icon.ico");
@@ -19,6 +22,31 @@ const APP_USER_MODEL_ID = "com.f95tracker.app";
 
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_USER_MODEL_ID);
+}
+
+app.commandLine.appendSwitch("force-webrtc-ip-handling-policy", "disable_non_proxied_udp");
+
+function isSafeBrowserUrl(candidateUrl) {
+  try {
+    const parsed = new URL(String(candidateUrl || "").trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isSupportedDirectDownloadUrl(candidateUrl) {
+  try {
+    const host = new URL(String(candidateUrl || "").trim()).host.toLowerCase();
+    return (
+      host === "vik1ngfile.site" ||
+      host === "vikingfile.com" ||
+      host === "pixeldrain.com" ||
+      host === "www.pixeldrain.com"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function restoreMainWindow() {
@@ -103,6 +131,168 @@ function showGameUpdateNotification(payload) {
   notification.show();
 }
 
+function getDownloadSession() {
+  return session.fromPartition(DOWNLOAD_PARTITION);
+}
+
+function buildDownloadWindowTitle(payload) {
+  const label = String(payload?.label || "").trim();
+  return label ? `Download - ${label}` : "Download";
+}
+
+function closeDownloadWindow() {
+  if (!downloadWindow || downloadWindow.isDestroyed()) {
+    downloadWindow = null;
+    downloadWindowState = null;
+    return;
+  }
+
+  if (downloadWindowState) {
+    downloadWindowState.closing = true;
+  }
+
+  downloadWindow.close();
+}
+
+async function buildCookieHeaderForUrl(targetUrl) {
+  const downloadCookies = await getDownloadSession().cookies.get({ url: targetUrl });
+  const authCookies = appService?.authSession
+    ? await appService.authSession.cookies.get({ url: targetUrl }).catch(() => [])
+    : [];
+  const cookieMap = new Map();
+
+  [...downloadCookies, ...authCookies].forEach((cookie) => {
+    if (cookie?.name) {
+      cookieMap.set(cookie.name, cookie.value);
+    }
+  });
+
+  return [...cookieMap.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+async function syncAuthCookiesToDownloadSession(targetUrl) {
+  if (!appService?.authSession || !isSafeBrowserUrl(targetUrl)) {
+    return;
+  }
+
+  const authCookies = await appService.authSession.cookies.get({ url: targetUrl }).catch(() => []);
+  if (authCookies.length === 0) {
+    return;
+  }
+
+  const downloadSession = getDownloadSession();
+  await Promise.all(
+    authCookies.map(async (cookie) => {
+      const cookieUrl = `${cookie.secure ? "https" : "http"}://${cookie.domain.replace(/^\./, "")}${cookie.path}`;
+      const payload = {
+        url: cookieUrl,
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        secure: cookie.secure,
+        httpOnly: cookie.httpOnly,
+        sameSite: cookie.sameSite
+      };
+
+      if (cookie.expirationDate) {
+        payload.expirationDate = cookie.expirationDate;
+      }
+
+      try {
+        await downloadSession.cookies.set(payload);
+      } catch (error) {
+        logger?.warn("Failed to mirror auth cookie into download session.", {
+          targetUrl,
+          cookieName: cookie.name,
+          message: error.message
+        });
+      }
+    })
+  );
+}
+
+async function takeOverResolvedDownload(jobId, payload = {}) {
+  const job = appService.getDownloadJob(jobId);
+  if (!job) {
+    return null;
+  }
+
+  if (["resolving", "downloading", "completed"].includes(job.status)) {
+    return job;
+  }
+
+  const resolvedUrl = String(payload.url || "").trim();
+  if (!resolvedUrl) {
+    throw new Error("No resolved download url was provided.");
+  }
+
+  await syncAuthCookiesToDownloadSession(resolvedUrl);
+  const cookieHeader = payload.cookieHeader ?? (await buildCookieHeaderForUrl(resolvedUrl));
+  const referrer =
+    payload.referrer ||
+    (downloadWindow && !downloadWindow.isDestroyed() ? downloadWindow.webContents.getURL() : job.sourceUrl);
+
+  closeDownloadWindow();
+  return appService.startResolvedDownload(jobId, {
+    url: resolvedUrl,
+    fileName: payload.fileName || "",
+    referrer,
+    cookieHeader
+  });
+}
+
+function maybeTakeOverDownloadUrl(jobId, candidateUrl, extra = {}) {
+  if (!appService.isProbableFileDownloadUrl(candidateUrl)) {
+    return false;
+  }
+
+  void takeOverResolvedDownload(jobId, {
+    url: candidateUrl,
+    referrer: extra.referrer || candidateUrl,
+    fileName: extra.fileName || ""
+  }).catch((error) => {
+    logger?.error("Failed to take over resolved download url.", {
+      jobId,
+      candidateUrl,
+      message: error.message
+    });
+  });
+
+  return true;
+}
+
+function attachDownloadSessionListeners() {
+  const downloadSession = getDownloadSession();
+  if (downloadSession.__f95DownloadListenersAttached) {
+    return;
+  }
+
+  downloadSession.__f95DownloadListenersAttached = true;
+  downloadSession.on("will-download", (event, item, webContents) => {
+    const state = downloadWindowState;
+    if (!state || webContents.id !== state.webContentsId) {
+      return;
+    }
+
+    event.preventDefault();
+    item.cancel();
+    state.downloadStarted = true;
+
+    void takeOverResolvedDownload(state.jobId, {
+      url: item.getURL(),
+      fileName: item.getFilename(),
+      referrer: webContents.getURL()
+    }).catch((error) => {
+      logger?.error("Failed to take over browser-triggered download.", {
+        jobId: state.jobId,
+        url: item.getURL(),
+        message: error.message
+      });
+    });
+  });
+}
+
 async function createWindow() {
   await logger?.info("Creating main window.");
   mainWindow = new BrowserWindow({
@@ -184,6 +374,137 @@ async function createLoginWindow() {
     logger?.info("Login window closed.");
     loginWindow = null;
   });
+}
+
+async function createDownloadWindow(payload) {
+  const targetUrl = String(payload?.url || "").trim();
+  if (!isSupportedDirectDownloadUrl(targetUrl)) {
+    throw new Error("Direct in-app downloads are currently only supported for Vikingfile and Pixeldrain links.");
+  }
+
+  await appService.ensureDownloadReady();
+
+  if (downloadWindow && !downloadWindow.isDestroyed()) {
+    if (downloadWindowState?.jobId) {
+      appService.cancelDownloadJob(downloadWindowState.jobId, "Canceled because another download window was opened.");
+    }
+    closeDownloadWindow();
+  }
+
+  const job = appService.createDownloadJob(payload);
+  await syncAuthCookiesToDownloadSession(targetUrl);
+
+  await logger?.info("Creating download window.", {
+    jobId: job.id,
+    sourceUrl: targetUrl,
+    host: job.host
+  });
+
+  downloadWindow = new BrowserWindow({
+    width: 1180,
+    height: 860,
+    minWidth: 980,
+    minHeight: 700,
+    parent: mainWindow || undefined,
+    modal: true,
+    autoHideMenuBar: true,
+    icon: appIconPath,
+    backgroundColor: "#16211e",
+    title: buildDownloadWindowTitle(payload),
+    webPreferences: {
+      partition: DOWNLOAD_PARTITION,
+      preload: path.join(__dirname, "downloadPreload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  downloadWindowState = {
+    jobId: job.id,
+    webContentsId: downloadWindow.webContents.id,
+    closing: false,
+    downloadStarted: false
+  };
+
+  downloadWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (maybeTakeOverDownloadUrl(job.id, url, { referrer: downloadWindow.webContents.getURL() })) {
+      return { action: "deny" };
+    }
+
+    if (!isSafeBrowserUrl(url)) {
+      logger?.warn("Blocked non-http download window target.", {
+        jobId: job.id,
+        url
+      });
+      return { action: "deny" };
+    }
+
+    void syncAuthCookiesToDownloadSession(url)
+      .then(() => downloadWindow.loadURL(url))
+      .catch((error) => {
+        logger?.warn("Download window navigation failed.", {
+          jobId: job.id,
+          url,
+          message: error.message
+        });
+      });
+    return { action: "deny" };
+  });
+
+  const handlePotentialDownloadNavigation = (candidateUrl) => {
+    if (!isSafeBrowserUrl(candidateUrl)) {
+      return false;
+    }
+
+    maybeTakeOverDownloadUrl(job.id, candidateUrl, {
+      referrer: downloadWindow && !downloadWindow.isDestroyed() ? downloadWindow.webContents.getURL() : targetUrl
+    });
+    return true;
+  };
+
+  downloadWindow.webContents.on("did-finish-load", () => {
+    appService.markDownloadAwaiting(job.id);
+  });
+  downloadWindow.webContents.on("will-navigate", (event, candidateUrl) => {
+    if (!isSafeBrowserUrl(candidateUrl)) {
+      event.preventDefault();
+      logger?.warn("Blocked non-http navigation inside download window.", {
+        jobId: job.id,
+        url: candidateUrl
+      });
+      return;
+    }
+
+    if (maybeTakeOverDownloadUrl(job.id, candidateUrl, { referrer: downloadWindow.webContents.getURL() })) {
+      event.preventDefault();
+    }
+  });
+  downloadWindow.webContents.on("did-redirect-navigation", (_event, candidateUrl) => {
+    handlePotentialDownloadNavigation(candidateUrl);
+  });
+  downloadWindow.webContents.on("did-navigate", (_event, candidateUrl) => {
+    handlePotentialDownloadNavigation(candidateUrl);
+  });
+
+  downloadWindow.on("closed", () => {
+    const state = downloadWindowState;
+    downloadWindow = null;
+    downloadWindowState = null;
+
+    if (state && !state.closing && !state.downloadStarted) {
+      appService.cancelDownloadJob(state.jobId);
+    }
+  });
+
+  try {
+    await syncAuthCookiesToDownloadSession(targetUrl);
+    await downloadWindow.loadURL(targetUrl);
+    return job;
+  } catch (error) {
+    appService.failDownloadJob(job.id, error);
+    closeDownloadWindow();
+    throw error;
+  }
 }
 
 function bindIpc() {
@@ -282,6 +603,7 @@ function bindIpc() {
   );
   handle("games:refreshAll", async () => appService.refreshAllGames());
   handle("jobs:decision", async (_event, payload) => appService.resolveArchiveMatch(payload));
+  handle("downloads:start", async (_event, payload) => createDownloadWindow(payload));
   handle("links:open", async (_event, url) => {
     await shell.openExternal(url);
     return { ok: true };
@@ -297,6 +619,7 @@ app.whenReady().then(async () => {
   });
 
   const authSession = session.fromPartition(AUTH_PARTITION);
+  attachDownloadSessionListeners();
   appService = new AppService({
     userDataPath: app.getPath("userData"),
     authSession,

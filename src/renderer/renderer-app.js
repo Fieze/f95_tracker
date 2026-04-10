@@ -12,6 +12,7 @@ const state = {
   authCheckResult: "",
   games: [],
   archiveJobs: [],
+  downloadJobs: [],
   currentExtraction: null,
   selectedGameId: null,
   editingFolderId: null,
@@ -118,6 +119,92 @@ function formatDurationMs(value) {
     return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
   }
   return `${seconds}s`;
+}
+
+function formatDownloadStatusLabel(status) {
+  const labels = {
+    opening_host: "opening host",
+    awaiting_download: "waiting for download",
+    resolving: "resolving",
+    downloading: "downloading",
+    completed: "done",
+    failed: "error",
+    canceled: "canceled"
+  };
+  return labels[String(status || "").toLowerCase()] || formatStatusLabel(status);
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes.toFixed(0)} B`;
+}
+
+function formatSpeedMbps(value) {
+  const bytesPerSecond = Math.max(0, Number(value || 0));
+  return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function getDownloadProgressPercent(job) {
+  const total = Number(job?.bytesTotal || 0);
+  const received = Number(job?.bytesReceived || 0);
+  if (!total) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (received / total) * 100));
+}
+
+function buildDownloadProgressSummary(job) {
+  if (!job) {
+    return "";
+  }
+
+  const received = formatBytes(job.bytesReceived);
+  const total = job.bytesTotal ? formatBytes(job.bytesTotal) : "unknown size";
+  const speed = job.status === "downloading" ? formatSpeedMbps(job.speedBytesPerSecond) : null;
+  return speed ? `${received} / ${total} | ${speed}` : `${received} / ${total}`;
+}
+
+function getActiveDownloadJobs() {
+  return (state.downloadJobs || []).filter((job) =>
+    ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
+  );
+}
+
+function getDownloadJobForLink(gameId, link) {
+  return (state.downloadJobs || []).find((job) => {
+    if (Number(job.gameId) !== Number(gameId)) {
+      return false;
+    }
+
+    if (job.linkId != null && link.id != null) {
+      return Number(job.linkId) === Number(link.id);
+    }
+
+    return String(job.sourceUrl || "") === String(link.url || "");
+  }) || null;
+}
+
+function isSupportedDirectDownloadUrl(url) {
+  try {
+    const host = new URL(String(url || "").trim()).host.toLowerCase();
+    return (
+      host === "vik1ngfile.site" ||
+      host === "vikingfile.com" ||
+      host === "pixeldrain.com" ||
+      host === "www.pixeldrain.com"
+    );
+  } catch {
+    return false;
+  }
 }
 
 function filePathToUrl(filePath) {
@@ -292,20 +379,32 @@ function getArchiveQueueOpenCount(jobs = state.archiveJobs) {
   return (jobs || []).filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status)).length;
 }
 
-function updateArchiveQueueAutoExpand(previousJobs, nextJobs) {
+function getActiveDownloadCount(downloadJobs = state.downloadJobs) {
+  return (downloadJobs || []).filter((job) =>
+    ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
+  ).length;
+}
+
+function updateArchiveQueueAutoExpand(previousJobs, nextJobs, previousDownloadJobs, nextDownloadJobs) {
   const previousCount = getArchiveQueueOpenCount(previousJobs || []);
   const nextCount = getArchiveQueueOpenCount(nextJobs || []);
   const previousTotal = (previousJobs || []).length;
   const nextTotal = (nextJobs || []).length;
+  const previousActiveDownloads = getActiveDownloadCount(previousDownloadJobs || []);
+  const nextActiveDownloads = getActiveDownloadCount(nextDownloadJobs || []);
 
   if (!archiveQueueInitialized) {
-    state.archiveQueueExpanded = nextTotal > 0;
+    state.archiveQueueExpanded = nextTotal > 0 || nextActiveDownloads > 0;
     state.archiveQueueReady = true;
     archiveQueueInitialized = true;
     return;
   }
 
-  if (nextCount > previousCount || nextTotal > previousTotal) {
+  if (
+    nextCount > previousCount ||
+    nextTotal > previousTotal ||
+    nextActiveDownloads > previousActiveDownloads
+  ) {
     state.archiveQueueExpanded = true;
   }
 }
@@ -525,12 +624,76 @@ function buildGameDetailsCard(selectedGame) {
     const wrapper = createNode("div", "download-group");
     wrapper.appendChild(createNode("strong", "", group.label));
     (group.links || []).forEach((link) => {
-      const button = createNode("button", "download-button", "Open Link");
       const row = createNode("div", "download-row");
-      button.type = "button";
-      button.addEventListener("click", () => window.f95App.openLink(link.url));
-      row.appendChild(createNode("span", "", link.label));
-      row.appendChild(button);
+      const job = getDownloadJobForLink(selectedGame.id, link);
+      const status = job?.status || "";
+      const busy = ["opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
+      const supportsDirectDownload = isSupportedDirectDownloadUrl(link.url);
+      const labelWrap = createNode("div", "download-meta");
+      const actions = createNode("div", "download-actions");
+      const primaryButton = createNode(
+        "button",
+        "download-button",
+        supportsDirectDownload ? (busy ? "Downloading..." : "Download") : "Open Link"
+      );
+      const secondaryButton = supportsDirectDownload
+        ? createNode("button", "download-button secondary", "Open Host")
+        : null;
+      labelWrap.appendChild(createNode("span", "", link.label));
+      if (!supportsDirectDownload) {
+        labelWrap.appendChild(
+          createNode("small", "download-status", "Direct download is currently only available for Vikingfile and Pixeldrain.")
+        );
+      }
+      if (job) {
+        const statusText = job.errorMessage
+          ? `${formatDownloadStatusLabel(job.status)} - ${job.errorMessage}`
+          : formatDownloadStatusLabel(job.status);
+        labelWrap.appendChild(createNode("small", `download-status status-${job.status}`, statusText));
+        if (job.status === "downloading") {
+          const progress = document.createElement("progress");
+          progress.className = "download-progress";
+          progress.max = 100;
+          progress.value = getDownloadProgressPercent(job);
+          labelWrap.appendChild(progress);
+          labelWrap.appendChild(
+            createNode("small", "download-progress-text", buildDownloadProgressSummary(job))
+          );
+        }
+      }
+
+      primaryButton.type = "button";
+      primaryButton.disabled = supportsDirectDownload && busy;
+      primaryButton.addEventListener("click", async () => {
+        if (!supportsDirectDownload) {
+          window.f95App.openLink(link.url);
+          return;
+        }
+
+        try {
+          await window.f95App.startDownload({
+            gameId: selectedGame.id,
+            linkId: link.id,
+            url: link.url,
+            label: link.label,
+            detectedVersion: selectedGame.currentVersion || ""
+          });
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      if (secondaryButton) {
+        secondaryButton.type = "button";
+        secondaryButton.addEventListener("click", () => window.f95App.openLink(link.url));
+      }
+
+      row.appendChild(labelWrap);
+      actions.appendChild(primaryButton);
+      if (secondaryButton) {
+        actions.appendChild(secondaryButton);
+      }
+      row.appendChild(actions);
       wrapper.appendChild(row);
     });
     groups.appendChild(wrapper);
@@ -773,6 +936,7 @@ function renderGames() {
 
 function renderJobs() {
   renderExtractionStatus();
+  renderActiveDownloads();
   renderArchiveQueueBar();
   const container = $("#jobs-list");
   container.innerHTML = "";
@@ -861,6 +1025,50 @@ function renderJobs() {
   });
 }
 
+function renderActiveDownloads() {
+  const section = $("#active-downloads-section");
+  const countNode = $("#active-downloads-count");
+  const list = $("#active-downloads-list");
+  if (!section || !countNode || !list) {
+    return;
+  }
+
+  const activeJobs = getActiveDownloadJobs();
+  section.classList.toggle("hidden", activeJobs.length === 0);
+  countNode.textContent = String(activeJobs.length);
+  list.innerHTML = "";
+
+  activeJobs.forEach((job) => {
+    const card = createNode("article", "download-activity-card");
+    const header = createNode("div", "download-activity-header");
+    const titleWrap = createNode("div", "download-activity-title-wrap");
+    const title = createNode("strong", "download-activity-title", job.fileName || job.label || job.host || "Download");
+    const subtitle = createNode(
+      "span",
+      "download-activity-subtitle",
+      job.label && job.fileName && job.label !== job.fileName ? `${job.label} | ${job.host}` : job.host || job.label || ""
+    );
+    const status = createNode("span", `status-chip ${job.status || "unknown"}`, formatDownloadStatusLabel(job.status));
+    const progress = document.createElement("progress");
+    const progressText = createNode("div", "download-activity-progress-text", buildDownloadProgressSummary(job));
+
+    progress.className = "download-activity-progress";
+    progress.max = 100;
+    progress.value = getDownloadProgressPercent(job);
+
+    titleWrap.appendChild(title);
+    if (subtitle.textContent) {
+      titleWrap.appendChild(subtitle);
+    }
+    header.appendChild(titleWrap);
+    header.appendChild(status);
+    card.appendChild(header);
+    card.appendChild(progress);
+    card.appendChild(progressText);
+    list.appendChild(card);
+  });
+}
+
 function renderArchiveQueueBar() {
   const bar = $("#archive-queue-bar");
   const toggle = $("#archive-queue-toggle");
@@ -873,14 +1081,17 @@ function renderArchiveQueueBar() {
   const openCount = getArchiveQueueOpenCount();
   const totalCount = state.archiveJobs.length;
   const extractionActive = Boolean(state.currentExtraction);
-  const canExpand = totalCount > 0;
-  const summaryText = extractionActive
-    ? "Extraction in progress."
-    : openCount > 0
-      ? `${openCount} archive${openCount === 1 ? "" : "s"} need attention.`
-      : totalCount > 0
-        ? "All detected archives are resolved."
-        : "";
+  const activeDownloadCount = getActiveDownloadJobs().length;
+  const canExpand = totalCount > 0 || activeDownloadCount > 0 || extractionActive;
+  const summaryText = activeDownloadCount > 0
+    ? `${activeDownloadCount} download${activeDownloadCount === 1 ? "" : "s"} active.`
+    : extractionActive
+      ? "Extraction in progress."
+      : openCount > 0
+        ? `${openCount} archive${openCount === 1 ? "" : "s"} need attention.`
+        : totalCount > 0
+          ? "All detected archives are resolved."
+          : "";
 
   bar.classList.toggle("is-collapsed", !state.archiveQueueExpanded);
   bar.classList.toggle("is-pending", !state.archiveQueueReady);
@@ -937,8 +1148,14 @@ async function reloadState() {
     do {
       reloadStateQueued = false;
       const previousJobs = state.archiveJobs || [];
+      const previousDownloadJobs = state.downloadJobs || [];
       const nextState = await window.f95App.bootstrap();
-      updateArchiveQueueAutoExpand(previousJobs, nextState.archiveJobs || []);
+      updateArchiveQueueAutoExpand(
+        previousJobs,
+        nextState.archiveJobs || [],
+        previousDownloadJobs,
+        nextState.downloadJobs || []
+      );
       Object.assign(state, nextState);
       pruneLaunchExecutableCache(state.games);
       if (!state.games.some((game) => game.id === state.selectedGameId)) {

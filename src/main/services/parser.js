@@ -181,20 +181,24 @@ function parseThreadTitle(rawTitle) {
 }
 
 function parseDownloadLabel(text) {
-  const match = String(text || "").match(/^(win\/linux|windows|win)\s*:/i);
+  const match = String(text || "").match(/^(win\/linux|windows|win)(?:\s*\([^)]*\))?\s*:/i);
   return match ? match[1] : null;
 }
 
 function normalizeDownloadLabel(label) {
-  return String(label || "").toLowerCase() === "windows" ? "Windows" : label;
+  const normalized = String(label || "").toLowerCase();
+  if (normalized === "windows") {
+    return "Windows";
+  }
+  return label;
 }
 
 function isDownloadsHeaderLine(text) {
-  return /^downloads\b[\s:.-]*$/i.test(String(text || "").trim());
+  return /^downloads?\b[\s:.-]*$/i.test(String(text || "").trim());
 }
 
 function isDownloadRow(text) {
-  return /^(win\/linux|windows|win|mac|android)\s*:/i.test(String(text || "").trim());
+  return /^(win\/linux|windows|win|mac|android)(?:\s*\([^)]*\))?\s*:/i.test(String(text || "").trim());
 }
 
 function isBlockBoundary(tagName) {

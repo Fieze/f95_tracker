@@ -210,6 +210,86 @@ body {
   border-top: 1px solid rgba(171, 204, 191, 0.08);
 }
 
+.active-downloads-section.hidden {
+  display: none;
+}
+
+.archive-queue-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.archive-queue-section-heading h4 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.archive-queue-section-count {
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(233, 245, 239, 0.08);
+  border: 1px solid rgba(171, 204, 191, 0.16);
+  color: var(--text);
+  text-align: center;
+  font-weight: 700;
+}
+
+.active-downloads-list {
+  display: grid;
+  gap: 12px;
+}
+
+.download-activity-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(21, 34, 32, 0.98), rgba(14, 23, 22, 0.94));
+  border: 1px solid rgba(171, 204, 191, 0.1);
+}
+
+.download-activity-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.download-activity-title-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.download-activity-title {
+  word-break: break-word;
+}
+
+.download-activity-subtitle,
+.download-activity-progress-text,
+.download-progress-text {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.download-activity-progress,
+.download-progress {
+  width: 100%;
+  height: 10px;
+}
+
+.download-progress {
+  margin-top: 2px;
+}
+
 .archive-queue-bar.is-collapsed .archive-queue-body {
   display: none;
 }
@@ -1310,6 +1390,32 @@ button:hover,
 .download-group strong {
   font-size: 0.9rem;
   color: var(--accent-strong);
+}
+
+.download-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.download-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.download-status {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.download-status.status-completed {
+  color: #9fe3af;
+}
+
+.download-status.status-failed,
+.download-status.status-canceled {
+  color: #f0b0b0;
 }
 
 .debug-panel {

@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs/promises");
+const http = require("http");
 const os = require("os");
 const path = require("path");
 const { AppService } = require("../src/main/services/appService");
@@ -234,6 +235,40 @@ test("hasThreadChanges returns false when the parsed thread content is unchanged
       }
     ),
     false
+  );
+});
+
+test("hasThreadChanges returns true when parser results change despite identical html", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  assert.equal(
+    service.hasThreadChanges(
+      {
+        sourceUrl: "https://f95zone.to/threads/example-game.123/",
+        rawOpHtml: "<article>same</article>",
+        rawOpText: "same",
+        parserWarnings: ["No download links were detected in the opening post."],
+        downloadGroups: []
+      },
+      {
+        sourceUrl: "https://f95zone.to/threads/example-game.123/",
+        rawOpHtml: "<article>same</article>",
+        rawOpText: "same",
+        warnings: [],
+        downloadGroups: [
+          {
+            label: "Win/Linux",
+            links: [
+              { label: "Mega", url: "https://example.org/win" }
+            ]
+          }
+        ]
+      }
+    ),
+    true
   );
 });
 
@@ -793,4 +828,159 @@ test("updating only seasonFinal keeps existing sort ranks stable", async (t) => 
   const afterRanks = service.db.listGameFolders(game.id).map((folder) => folder.sortRank);
 
   assert.deepEqual(afterRanks, beforeRanks);
+});
+
+test("startResolvedDownload requires a configured watch folder", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const job = service.createDownloadJob({
+    gameId: 1,
+    linkId: 1,
+    url: "https://example.com/file.zip",
+    label: "Example"
+  });
+
+  await assert.rejects(
+    () => service.startResolvedDownload(job.id, { url: "https://example.com/file.zip" }),
+    /watch folder/i
+  );
+  assert.equal(service.getDownloadJob(job.id)?.status, "failed");
+});
+
+test("startResolvedDownload streams files into the watch folder", async (t) => {
+  const { service, userDataPath } = await createService();
+  const watchFolder = path.join(userDataPath, "watch");
+  await service.updateSettings({
+    watchFolder,
+    installRoot: path.join(userDataPath, "installs"),
+    syncIntervalMinutes: 30
+  });
+
+  const server = http.createServer((request, response) => {
+    if (request.url === "/archive") {
+      const payload = Buffer.from("download payload");
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": payload.length,
+        "Content-Disposition": 'attachment; filename="sample.zip"'
+      });
+      response.end(payload);
+      return;
+    }
+
+    response.writeHead(404);
+    response.end("missing");
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const archiveUrl = `http://127.0.0.1:${address.port}/archive`;
+
+  t.after(async () => {
+    server.close();
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const job = service.createDownloadJob({
+    gameId: 1,
+    linkId: 2,
+    url: archiveUrl,
+    label: "Archive",
+    detectedVersion: "1.2"
+  });
+
+  const autoExtractCalls = [];
+  service.processArchive = async (payload) => {
+    autoExtractCalls.push(payload);
+    return { id: 99, status: "processed" };
+  };
+
+  const completed = await service.startResolvedDownload(job.id, {
+    url: archiveUrl,
+    referrer: "https://host.example/file"
+  });
+
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.fileName, "sample.zip");
+  assert.match(completed.targetPath, /sample\.zip$/);
+  assert.ok(completed.startedAt);
+  assert.ok(completed.completedAt);
+  assert.ok(Number(completed.speedBytesPerSecond) >= 0);
+  assert.equal(await fs.readFile(completed.targetPath, "utf8"), "download payload");
+  await assert.rejects(() => fs.access(`${completed.targetPath}.part`));
+  assert.equal(autoExtractCalls.length, 1);
+  assert.equal(autoExtractCalls[0].gameId, 1);
+  assert.equal(autoExtractCalls[0].detectedVersion, "1.2");
+  assert.equal(autoExtractCalls[0].autoExtract, true);
+});
+
+test("processArchive persists and returns a stable archive job", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const job = await service.processArchive({
+    archivePath: "C:\\Downloads\\Example-1.0-win.zip",
+    archiveName: "Example-1.0-win.zip",
+    archiveHash: "abc123"
+  });
+
+  assert.ok(job);
+  assert.equal(job.archive_name, "Example-1.0-win.zip");
+  assert.ok(job.status);
+});
+
+test("processArchive can force a game match and trigger extraction", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const game = await service.db.upsertGameFromThread({
+    sourceUrl: "https://f95zone.to/threads/example-game.111/",
+    title: "Example Game",
+    threadTitle: "Example Game",
+    currentVersion: "2.0",
+    developer: "Dev",
+    engine: "Ren'Py",
+    threadStatus: "Ongoing",
+    overview: "",
+    releaseDate: "",
+    changelog: "",
+    bannerImage: null,
+    screenshotImages: [],
+    tags: [],
+    warnings: [],
+    aliases: [],
+    rawOpHtml: "",
+    rawOpText: "",
+    parserDebug: {},
+    downloadGroups: []
+  });
+
+  const extractCalls = [];
+  service.extractJob = async (jobId, gameId, detectedVersion) => {
+    extractCalls.push({ jobId, gameId, detectedVersion });
+  };
+
+  const job = await service.processArchive({
+    archivePath: "C:\\Downloads\\Example-2.0-win.zip",
+    archiveName: "Example-2.0-win.zip",
+    archiveHash: "xyz987",
+    gameId: game.id,
+    detectedVersion: game.currentVersion,
+    autoExtract: true
+  });
+
+  assert.ok(job);
+  assert.equal(extractCalls.length, 1);
+  assert.equal(extractCalls[0].gameId, game.id);
+  assert.equal(extractCalls[0].detectedVersion, "2.0");
 });

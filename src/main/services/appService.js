@@ -26,6 +26,19 @@ const EXTRACTION_PROGRESS_EMIT_INTERVAL_MS = 250;
 const EXTRACTION_PROGRESS_LOG_INTERVAL_MS = 5000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
+const DOWNLOAD_PROGRESS_EMIT_INTERVAL_MS = 250;
+const DOWNLOADABLE_FILE_EXTENSIONS = new Set([
+  ".zip",
+  ".rar",
+  ".7z",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".tgz",
+  ".exe",
+  ".apk"
+]);
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger }) {
@@ -41,6 +54,9 @@ class AppService {
     this.folderSyncTimer = null;
     this.backupTimer = null;
     this.startupRefreshPromise = null;
+    this.downloadJobs = [];
+    this.nextDownloadJobId = 1;
+    this.activeDownloadControllers = new Map();
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
     this.lastExtractionProgressEmitAt = 0;
@@ -84,7 +100,8 @@ class AppService {
       auth: await this.getAuthState(),
       games: this.db.getGames(),
       archiveJobs: this.db.listArchiveJobs(),
-      currentExtraction: this.currentExtraction
+      currentExtraction: this.currentExtraction,
+      downloadJobs: this.listDownloadJobs()
     };
   }
 
@@ -688,10 +705,13 @@ class AppService {
     }
   }
 
-  async processArchive({ archivePath, archiveName, archiveHash }) {
+  async processArchive({ archivePath, archiveName, archiveHash, gameId = null, detectedVersion = null, autoExtract = false }) {
     await this.logger.info("Processing detected archive.", {
       archiveName,
-      archivePath
+      archivePath,
+      gameId: gameId ? Number(gameId) : null,
+      detectedVersion: detectedVersion || null,
+      autoExtract: Boolean(autoExtract)
     });
     const existing = this.db.findArchiveJobByPath(archivePath, archiveName);
     if (existing && existing.archive_hash === archiveHash && ["queued", "needs-review", "unmatched", "processing", "processed"].includes(existing.status)) {
@@ -700,14 +720,17 @@ class AppService {
 
     const games = this.db.getGames();
     const match = findBestGameMatch(archiveName, games);
+    const forcedGame = gameId ? games.find((entry) => entry.id === Number(gameId)) : null;
     const payload = {
       archivePath,
       archiveName,
       archiveHash,
-      gameId: match.bestMatch?.gameId || null,
-      detectedVersion: match.bestMatch?.version || null,
+      gameId: forcedGame?.id || match.bestMatch?.gameId || null,
+      detectedVersion: detectedVersion || match.bestMatch?.version || forcedGame?.currentVersion || null,
       status:
-        match.kind === "matched"
+        forcedGame
+          ? "queued"
+          : match.kind === "matched"
           ? "queued"
           : match.kind === "needs-review"
             ? "needs-review"
@@ -731,12 +754,22 @@ class AppService {
       job = await this.db.createArchiveJob(payload);
     }
 
+    if (!job) {
+      throw new Error("Archive job could not be persisted.");
+    }
+
     this.emitChange();
     await this.logger.info("Archive job updated.", {
       archiveName,
       status: job.status,
       jobId: job.id
     });
+
+    if (autoExtract && payload.gameId && job.status === "queued") {
+      await this.extractJob(job.id, payload.gameId, payload.detectedVersion);
+      return this.db.findArchiveJobByPath(archivePath, archiveName) || job;
+    }
+
     return job;
   }
 
@@ -974,10 +1007,17 @@ class AppService {
       return true;
     }
 
+    const existingWarnings = JSON.stringify(existingThread.parserWarnings || []);
+    const parsedWarnings = JSON.stringify(parsedThread.warnings || []);
+    const existingDownloads = JSON.stringify(existingThread.downloadGroups || []);
+    const parsedDownloads = JSON.stringify(parsedThread.downloadGroups || []);
+
     return (
       String(existingThread.sourceUrl || "") !== String(parsedThread.sourceUrl || "") ||
       String(existingThread.rawOpHtml || "") !== String(parsedThread.rawOpHtml || "") ||
-      String(existingThread.rawOpText || "") !== String(parsedThread.rawOpText || "")
+      String(existingThread.rawOpText || "") !== String(parsedThread.rawOpText || "") ||
+      existingWarnings !== parsedWarnings ||
+      existingDownloads !== parsedDownloads
     );
   }
 
@@ -1042,6 +1082,384 @@ class AppService {
     }
   }
 
+  listDownloadJobs() {
+    return [...this.downloadJobs].sort((left, right) => {
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+  }
+
+  async ensureDownloadReady() {
+    const settings = this.db.getSettings();
+    const configuredPath = String(settings.watchFolder || "").trim();
+    if (!configuredPath) {
+      throw new Error("Please configure a watch folder before starting downloads.");
+    }
+
+    const watchFolder = path.resolve(configuredPath);
+    await fs.mkdir(watchFolder, { recursive: true });
+    return watchFolder;
+  }
+
+  createDownloadJob({ gameId, linkId = null, url, label = "", detectedVersion = "" }) {
+    const sourceUrl = String(url || "").trim();
+    if (!/^https?:/i.test(sourceUrl)) {
+      throw new Error("Download url must be absolute.");
+    }
+
+    const job = {
+      id: this.nextDownloadJobId++,
+      gameId: Number(gameId) || null,
+      linkId: linkId == null ? null : Number(linkId),
+      sourceUrl,
+      resolvedUrl: "",
+      host: this.getDownloadHost(sourceUrl),
+      label: String(label || "").trim(),
+      detectedVersion: String(detectedVersion || "").trim() || null,
+      fileName: "",
+      targetPath: "",
+      bytesReceived: 0,
+      bytesTotal: 0,
+      speedBytesPerSecond: 0,
+      status: "opening_host",
+      errorMessage: "",
+      startedAt: "",
+      completedAt: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    this.downloadJobs = [...this.downloadJobs, job];
+    this.emitChange();
+    return job;
+  }
+
+  updateDownloadJob(jobId, updates = {}) {
+    let nextJob = null;
+    this.downloadJobs = this.downloadJobs.map((entry) => {
+      if (entry.id !== Number(jobId)) {
+        return entry;
+      }
+
+      nextJob = {
+        ...entry,
+        ...updates,
+        updatedAt: new Date().toISOString()
+      };
+      return nextJob;
+    });
+
+    if (nextJob) {
+      this.emitChange();
+    }
+
+    return nextJob;
+  }
+
+  getDownloadJob(jobId) {
+    return this.downloadJobs.find((entry) => entry.id === Number(jobId)) || null;
+  }
+
+  markDownloadAwaiting(jobId) {
+    return this.updateDownloadJob(jobId, {
+      status: "awaiting_download",
+      speedBytesPerSecond: 0,
+      errorMessage: ""
+    });
+  }
+
+  cancelDownloadJob(jobId, errorMessage = "Download window was closed before a file download started.") {
+    const job = this.getDownloadJob(jobId);
+    if (!job) {
+      return null;
+    }
+
+    if (["completed", "failed", "canceled"].includes(job.status)) {
+      return job;
+    }
+
+    const controller = this.activeDownloadControllers.get(job.id);
+    if (controller) {
+      controller.abort();
+      this.activeDownloadControllers.delete(job.id);
+    }
+
+    return this.updateDownloadJob(jobId, {
+      status: "canceled",
+      speedBytesPerSecond: 0,
+      errorMessage
+    });
+  }
+
+  failDownloadJob(jobId, error) {
+    const message = error?.message || String(error || "Download failed.");
+    this.activeDownloadControllers.delete(Number(jobId));
+    return this.updateDownloadJob(jobId, {
+      status: "failed",
+      speedBytesPerSecond: 0,
+      errorMessage: message
+    });
+  }
+
+  getDownloadHost(downloadUrl) {
+    try {
+      return new URL(downloadUrl).host;
+    } catch {
+      return "";
+    }
+  }
+
+  isProbableFileDownloadUrl(downloadUrl) {
+    try {
+      const parsed = new URL(downloadUrl);
+      const extension = path.extname(parsed.pathname || "").toLowerCase();
+      return DOWNLOADABLE_FILE_EXTENSIONS.has(extension);
+    } catch {
+      return false;
+    }
+  }
+
+  async startResolvedDownload(jobId, options = {}) {
+    const job = this.getDownloadJob(jobId);
+    if (!job) {
+      throw new Error("Download job not found.");
+    }
+
+    const controller = new AbortController();
+    this.activeDownloadControllers.set(job.id, controller);
+
+    try {
+      await this.ensureDownloadReady();
+      this.updateDownloadJob(job.id, {
+        status: "resolving",
+        resolvedUrl: String(options.url || job.sourceUrl || "").trim(),
+        errorMessage: ""
+      });
+
+      const response = await fetch(String(options.url || job.sourceUrl || "").trim(), {
+        headers: this.buildResolvedDownloadHeaders(options),
+        redirect: "follow",
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`Download request failed with status ${response.status}`);
+      }
+
+      const resolvedUrl = response.url || String(options.url || job.sourceUrl || "").trim();
+      const watchFolder = await this.ensureDownloadReady();
+      const fileName = this.resolveDownloadFileName({
+        preferredFileName: options.fileName,
+        resolvedUrl,
+        contentDisposition: response.headers.get("content-disposition") || ""
+      });
+      const targetPath = await this.reserveDownloadTargetPath(watchFolder, fileName);
+      const tempPath = `${targetPath}.part`;
+      const bytesTotal = Number(response.headers.get("content-length") || 0);
+
+      this.updateDownloadJob(job.id, {
+        status: "downloading",
+        resolvedUrl,
+        host: this.getDownloadHost(resolvedUrl),
+        fileName,
+        targetPath,
+        bytesReceived: 0,
+        bytesTotal: Number.isFinite(bytesTotal) ? bytesTotal : 0,
+        speedBytesPerSecond: 0,
+        startedAt: new Date().toISOString(),
+        completedAt: ""
+      });
+
+      await this.streamResponseToFile(response, tempPath, {
+        jobId: job.id,
+        bytesTotal,
+        signal: controller.signal
+      });
+
+      await fs.rename(tempPath, targetPath);
+      this.activeDownloadControllers.delete(job.id);
+      this.updateDownloadJob(job.id, {
+        status: "completed",
+        resolvedUrl,
+        fileName,
+        targetPath,
+        bytesReceived: bytesTotal || this.getDownloadJob(job.id)?.bytesReceived || 0,
+        bytesTotal: bytesTotal || this.getDownloadJob(job.id)?.bytesReceived || 0,
+        speedBytesPerSecond: this.getDownloadJob(job.id)?.speedBytesPerSecond || 0,
+        completedAt: new Date().toISOString(),
+        errorMessage: ""
+      });
+
+      await this.logger.info("Resolved file download completed.", {
+        jobId: job.id,
+        sourceUrl: job.sourceUrl,
+        resolvedUrl,
+        targetPath
+      });
+
+      if (job.gameId) {
+        this.folderWatcher.ignoreFile(targetPath, 45000);
+        await this.processArchive({
+          archivePath: targetPath,
+          archiveName: fileName,
+          archiveHash: null,
+          gameId: job.gameId,
+          detectedVersion: job.detectedVersion || null,
+          autoExtract: true
+        });
+      }
+
+      return this.getDownloadJob(job.id);
+    } catch (error) {
+      this.activeDownloadControllers.delete(job.id);
+      if (error?.name === "AbortError") {
+        this.cancelDownloadJob(job.id, "Download canceled.");
+      } else {
+        this.failDownloadJob(job.id, error);
+      }
+      throw error;
+    }
+  }
+
+  buildResolvedDownloadHeaders(options = {}) {
+    const headers = {
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0 Safari/537.36"
+    };
+
+    if (options.cookieHeader) {
+      headers.cookie = options.cookieHeader;
+    }
+
+    if (options.referrer) {
+      headers.referer = options.referrer;
+      headers.referrer = options.referrer;
+    }
+
+    return headers;
+  }
+
+  async streamResponseToFile(response, filePath, { jobId, bytesTotal = 0, signal } = {}) {
+    const fileHandle = await fs.open(filePath, "w");
+    let bytesReceived = 0;
+    let lastEmitAt = 0;
+    let completed = false;
+    const startedAt = Date.now();
+
+    try {
+      if (!response.body || typeof response.body.getReader !== "function") {
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (signal?.aborted) {
+          const error = new Error("Download canceled.");
+          error.name = "AbortError";
+          throw error;
+        }
+        await fileHandle.writeFile(buffer);
+        bytesReceived = buffer.length;
+        this.updateDownloadJob(jobId, {
+          bytesReceived,
+          bytesTotal: bytesTotal || buffer.length,
+          speedBytesPerSecond: bytesReceived
+        });
+        completed = true;
+        return;
+      }
+
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          completed = true;
+          break;
+        }
+
+        if (signal?.aborted) {
+          const error = new Error("Download canceled.");
+          error.name = "AbortError";
+          throw error;
+        }
+
+        const chunk = Buffer.from(value);
+        await fileHandle.write(chunk, 0, chunk.length);
+        bytesReceived += chunk.length;
+
+        const now = Date.now();
+        if (now - lastEmitAt >= DOWNLOAD_PROGRESS_EMIT_INTERVAL_MS) {
+          lastEmitAt = now;
+          const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001);
+          this.updateDownloadJob(jobId, {
+            bytesReceived,
+            bytesTotal: bytesTotal || 0,
+            speedBytesPerSecond: bytesReceived / elapsedSeconds
+          });
+        }
+      }
+
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      this.updateDownloadJob(jobId, {
+        bytesReceived,
+        bytesTotal: bytesTotal || bytesReceived,
+        speedBytesPerSecond: bytesReceived / elapsedSeconds
+      });
+    } finally {
+      await fileHandle.close();
+      if (!completed) {
+        await fs.unlink(filePath).catch(() => {});
+      }
+    }
+  }
+
+  resolveDownloadFileName({ preferredFileName, resolvedUrl, contentDisposition }) {
+    const explicit = this.sanitizeDownloadFileName(preferredFileName);
+    if (explicit) {
+      return explicit;
+    }
+
+    const fromDisposition = this.sanitizeDownloadFileName(this.extractFileNameFromContentDisposition(contentDisposition));
+    if (fromDisposition) {
+      return fromDisposition;
+    }
+
+    try {
+      const parsed = new URL(resolvedUrl);
+      const fromPath = this.sanitizeDownloadFileName(decodeURIComponent(path.basename(parsed.pathname || "")));
+      if (fromPath) {
+        return fromPath;
+      }
+    } catch {
+      // Ignore invalid urls and fall through to default file name.
+    }
+
+    return "download.bin";
+  }
+
+  sanitizeDownloadFileName(fileName) {
+    const normalized = path.basename(String(fileName || "").trim()).replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_");
+    return normalized || "";
+  }
+
+  extractFileNameFromContentDisposition(contentDisposition) {
+    const header = String(contentDisposition || "");
+    const starMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (starMatch?.[1]) {
+      return decodeURIComponent(starMatch[1]);
+    }
+
+    const plainMatch = header.match(/filename="?([^\";]+)"?/i);
+    return plainMatch?.[1] || "";
+  }
+
+  async reserveDownloadTargetPath(folderPath, fileName) {
+    const parsed = path.parse(fileName);
+    let candidate = path.join(folderPath, fileName);
+    let counter = 1;
+
+    while (await this.assetExists(candidate)) {
+      candidate = path.join(folderPath, `${parsed.name} (${counter})${parsed.ext}`);
+      counter += 1;
+    }
+
+    return candidate;
+  }
+
   emitChange() {
     this.onStateChanged?.();
   }
@@ -1096,6 +1514,21 @@ class AppService {
       this.activeExtractionHandle.terminate();
       this.activeExtractionHandle = null;
     }
+    for (const controller of this.activeDownloadControllers.values()) {
+      controller.abort();
+    }
+    this.activeDownloadControllers.clear();
+    this.downloadJobs = this.downloadJobs.map((job) => {
+      if (["downloading", "resolving", "opening_host", "awaiting_download"].includes(job.status)) {
+        return {
+          ...job,
+          status: "canceled",
+          errorMessage: "Download was interrupted when the app closed.",
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return job;
+    });
     this.scheduler.stop();
     this.stopManagedFolderMonitor();
     this.stopBackupScheduler();

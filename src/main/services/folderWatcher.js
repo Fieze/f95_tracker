@@ -10,6 +10,7 @@ class FolderWatcher {
     this.onArchiveDetected = onArchiveDetected;
     this.watcher = null;
     this.processing = new Set();
+    this.ignoredUntilByPath = new Map();
   }
 
   async start(targetFolder) {
@@ -50,6 +51,11 @@ class FolderWatcher {
 
   async handleFile(filePath) {
     const key = filePath.toLowerCase();
+    const ignoredUntil = this.ignoredUntilByPath.get(key) || 0;
+    if (ignoredUntil > Date.now()) {
+      return;
+    }
+
     if (this.processing.has(key)) {
       return;
     }
@@ -78,6 +84,15 @@ class FolderWatcher {
       previousSize = stats.size;
       await delay(1200);
     }
+  }
+
+  ignoreFile(filePath, durationMs = 30000) {
+    const key = String(filePath || "").toLowerCase();
+    if (!key) {
+      return;
+    }
+
+    this.ignoredUntilByPath.set(key, Date.now() + Math.max(1000, Number(durationMs) || 0));
   }
 }
 

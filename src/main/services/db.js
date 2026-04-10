@@ -337,18 +337,37 @@ class DatabaseService {
 
   getGameRefreshMetadata(gameId) {
     const row = this.first(
-      "SELECT id, thread_url, raw_op_html, raw_op_text, banner_image_url, banner_image_path, screenshot_images FROM games WHERE id = ?",
+      "SELECT id, thread_url, raw_op_html, raw_op_text, banner_image_url, banner_image_path, screenshot_images, parser_warnings FROM games WHERE id = ?",
       [gameId]
     );
     if (!row) {
       return null;
     }
 
+    const links = this.query(
+      "SELECT group_label, label, url FROM download_links WHERE game_id = ? ORDER BY group_label, label, url",
+      [gameId]
+    );
+    const downloadGroups = [];
+    links.forEach((link) => {
+      let group = downloadGroups.find((entry) => entry.label === (link.group_label || "Downloads"));
+      if (!group) {
+        group = { label: link.group_label || "Downloads", links: [] };
+        downloadGroups.push(group);
+      }
+      group.links.push({
+        label: link.label || "",
+        url: link.url || ""
+      });
+    });
+
     return {
       id: row.id,
       sourceUrl: row.thread_url,
       rawOpHtml: row.raw_op_html || "",
       rawOpText: row.raw_op_text || "",
+      parserWarnings: safeJsonParse(row.parser_warnings, []),
+      downloadGroups,
       bannerImage: row.banner_image_path
         ? {
             sourceUrl: row.banner_image_url || null,
@@ -951,8 +970,9 @@ class DatabaseService {
         new Date().toISOString()
       ]
     );
+    const insertedId = this.first("SELECT last_insert_rowid() AS id")?.id || null;
     await this.persist();
-    return this.first("SELECT * FROM archive_jobs WHERE id = last_insert_rowid()");
+    return insertedId ? this.first("SELECT * FROM archive_jobs WHERE id = ?", [insertedId]) : null;
   }
 
   async updateArchiveJob(jobId, updates) {
