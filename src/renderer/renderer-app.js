@@ -25,9 +25,13 @@ const GAME_TILE_MAX_COLUMNS = 7;
 const GAME_TILE_PREFERRED_WIDTH = 290;
 const GAME_TILE_BASE_WIDTH = 267;
 const GAME_TILE_GAP = 18;
+const LIVE_STATE_RELOAD_INTERVAL_MS = 500;
 let gamesGridResizeObserver = null;
 let reloadStatePromise = null;
 let reloadStateQueued = false;
+let scheduledReloadStateTimer = null;
+let scheduledReloadStatePromise = null;
+let lastReloadStateAt = 0;
 let archiveQueueInitialized = false;
 const launchExecutableCache = new Map();
 
@@ -1257,6 +1261,7 @@ async function reloadState() {
         }
       }
       render();
+      lastReloadStateAt = Date.now();
     } while (reloadStateQueued);
   })();
 
@@ -1265,6 +1270,25 @@ async function reloadState() {
   } finally {
     reloadStatePromise = null;
   }
+}
+
+function scheduleReloadState(minIntervalMs = LIVE_STATE_RELOAD_INTERVAL_MS) {
+  if (scheduledReloadStatePromise) {
+    return scheduledReloadStatePromise;
+  }
+
+  const elapsedSinceLastReload = Date.now() - lastReloadStateAt;
+  const delayMs = Math.max(0, Number(minIntervalMs || 0) - Math.max(0, elapsedSinceLastReload));
+
+  scheduledReloadStatePromise = new Promise((resolve, reject) => {
+    scheduledReloadStateTimer = window.setTimeout(() => {
+      scheduledReloadStateTimer = null;
+      scheduledReloadStatePromise = null;
+      reloadState().then(resolve).catch(reject);
+    }, delayMs);
+  });
+
+  return scheduledReloadStatePromise;
 }
 
 async function handleSettingsSubmit(event) {
@@ -1457,8 +1481,8 @@ async function initialize() {
     window.addEventListener("resize", layoutGamesGrid);
   }
 
-  window.f95App.onStateChanged(async () => {
-    await reloadState();
+  window.f95App.onStateChanged(() => {
+    void scheduleReloadState();
   });
 
   await reloadState();
