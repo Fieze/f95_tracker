@@ -9,6 +9,7 @@ const { extractVersionFromFilename, findBestGameMatch } = require("./matcher");
 const { parseThread } = require("./parser");
 const { SyncScheduler } = require("./syncScheduler");
 const { ThreadFetcher } = require("./threadFetcher");
+const { noopLogger } = require("./logger");
 const {
   buildGameRootCandidates,
   buildInstallDirectory,
@@ -26,10 +27,11 @@ const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 
 class AppService {
-  constructor({ userDataPath, authSession, onStateChanged }) {
+  constructor({ userDataPath, authSession, onStateChanged, logger }) {
     this.onStateChanged = onStateChanged;
     this.authSession = authSession;
     this.userDataPath = userDataPath;
+    this.logger = logger || noopLogger;
     this.assetCachePath = path.join(userDataPath, "thread-assets");
     this.backupPath = path.join(userDataPath, "backups");
     this.currentExtraction = null;
@@ -50,6 +52,9 @@ class AppService {
   }
 
   async initialize() {
+    await this.logger.info("Initializing application service.", {
+      userDataPath: this.userDataPath
+    });
     await this.db.initialize();
     await this.db.resetInterruptedArchiveJobs();
     await this.pruneCompletedArchiveJobs();
@@ -60,6 +65,7 @@ class AppService {
     await this.pollManagedFolders({ emitOnChange: false });
     await this.createBackup();
     this.startBackupScheduler();
+    await this.logger.info("Application service initialized.");
   }
 
   async bootstrap() {
@@ -78,6 +84,11 @@ class AppService {
   }
 
   async updateSettings(payload) {
+    await this.logger.info("Updating settings.", {
+      installRoot: payload?.installRoot || "",
+      watchFolder: payload?.watchFolder || "",
+      syncIntervalMinutes: payload?.syncIntervalMinutes ?? null
+    });
     const settings = await this.db.saveSettings({
       watchFolder: payload.installRoot ? payload.watchFolder : payload.watchFolder,
       installRoot: payload.installRoot,
@@ -99,6 +110,7 @@ class AppService {
     const snapshot = this.db.exportSnapshot();
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, JSON.stringify(snapshot, null, 2), "utf8");
+    await this.logger.info("Exported data snapshot.", { targetPath });
     return { path: targetPath };
   }
 
@@ -116,16 +128,23 @@ class AppService {
     await this.ensureAllGameRoots();
     await this.pollManagedFolders({ emitOnChange: false });
     this.emitChange();
+    await this.logger.info("Imported data snapshot.", { sourcePath });
     return this.getState();
   }
 
   async deleteGame(gameId) {
+    await this.logger.info("Deleting game.", { gameId: Number(gameId) });
     await this.db.deleteGame(gameId);
     this.emitChange();
     return this.getState();
   }
 
   async setInstalledVersion(gameId, installedVersion, installPath) {
+    await this.logger.info("Setting installed version.", {
+      gameId: Number(gameId),
+      installedVersion: installedVersion || null,
+      installPath: installPath || null
+    });
     const game = this.db.getGameById(gameId);
     if (!game) {
       throw new Error("Game not found.");
@@ -191,6 +210,12 @@ class AppService {
       throw new Error("Game folder not found.");
     }
 
+    await this.logger.info("Updating game folder version.", {
+      folderId: folder.id,
+      gameId: folder.gameId,
+      version: sanitizeVersion(version) || null
+    });
+
     await this.db.updateGameFolderVersion(folder.id, sanitizeVersion(version) || null, "manual");
     const game = this.db.getGameById(folder.gameId);
     const folders = await this.db.recalculateGameFolderRanks(folder.gameId, { game });
@@ -202,6 +227,10 @@ class AppService {
   }
 
   async updateGameSeasons(gameId, hasSeasons) {
+    await this.logger.info("Updating game season mode.", {
+      gameId: Number(gameId),
+      hasSeasons: Boolean(hasSeasons)
+    });
     const game = this.db.getGameById(Number(gameId));
     if (!game) {
       throw new Error("Game not found.");
@@ -221,6 +250,18 @@ class AppService {
     if (!folder) {
       throw new Error("Game folder not found.");
     }
+    await this.logger.info("Updating game folder metadata.", {
+      folderId: folder.id,
+      gameId: folder.gameId,
+      updates: {
+        version: Object.prototype.hasOwnProperty.call(updates, "version") ? updates.version || null : undefined,
+        seasonNumber: Object.prototype.hasOwnProperty.call(updates, "seasonNumber") ? updates.seasonNumber : undefined,
+        seasonFinal: Object.prototype.hasOwnProperty.call(updates, "seasonFinal") ? Boolean(updates.seasonFinal) : undefined,
+        preferredExePath: Object.prototype.hasOwnProperty.call(updates, "preferredExePath")
+          ? updates.preferredExePath || null
+          : undefined
+      }
+    });
     const previousSeasonNumber = folder.seasonNumber ?? null;
     const nextVersion = Object.prototype.hasOwnProperty.call(updates, "version")
       ? sanitizeVersion(updates.version) || null
@@ -268,6 +309,12 @@ class AppService {
       throw new Error("Game folder not found.");
     }
 
+    await this.logger.info("Deleting game folder.", {
+      folderId: folder.id,
+      gameId: folder.gameId,
+      folderPath: folder.folderPath
+    });
+
     await fs.rm(folder.folderPath, { recursive: true, force: true });
     await this.db.deleteGameFolder(folder.id);
     const game = this.db.getGameById(folder.gameId);
@@ -277,6 +324,7 @@ class AppService {
   }
 
   async refreshGameFolders(gameId) {
+    await this.logger.info("Refreshing game folders.", { gameId: Number(gameId) });
     await this.syncGameFolders(gameId);
     this.emitChange();
     return this.db.getGameById(Number(gameId));
@@ -396,6 +444,11 @@ class AppService {
       windowsHide: false
     }).unref();
 
+    await this.logger.info("Launched executable.", {
+      folderId: folder.id,
+      gameId: folder.gameId,
+      executablePath: resolvedExecutablePath
+    });
     return { ok: true };
   }
 
@@ -436,6 +489,7 @@ class AppService {
   }
 
   async moveInstallPathToExpected(gameId) {
+    await this.logger.info("Moving install path to expected location.", { gameId: Number(gameId) });
     const validation = await this.validateInstallPath(gameId);
     if (validation.expected) {
       return this.db.getGameById(Number(gameId));
@@ -453,6 +507,11 @@ class AppService {
 
     await fs.mkdir(path.dirname(destinationResolved), { recursive: true });
     await this.movePath(sourceResolved, destinationResolved);
+    await this.logger.info("Moved install path.", {
+      gameId: Number(gameId),
+      sourceResolved,
+      destinationResolved
+    });
 
     const game = this.db.getGameById(Number(gameId));
     await this.syncGameFolders(game.id, {
@@ -483,6 +542,7 @@ class AppService {
 
   async addThread(threadUrl) {
     const normalizedUrl = normalizeThreadUrl(threadUrl);
+    await this.logger.info("Adding thread.", { threadUrl: normalizedUrl });
     const auth = await this.getAuthState();
     if (!auth.loggedIn) {
       throw new Error("Please log in to F95Zone first.");
@@ -494,6 +554,7 @@ class AppService {
     await this.ensureGameRootForGame(game);
     await this.syncGameFolders(game.id, { game: this.db.getGameById(game.id) });
     this.emitChange();
+    await this.logger.info("Thread added.", { gameId: game.id, title: game.title });
     return this.db.getGameById(game.id);
   }
 
@@ -502,6 +563,7 @@ class AppService {
     if (!game) {
       throw new Error("Game not found.");
     }
+    await this.logger.info("Refreshing game.", { gameId: Number(gameId), title: game.title });
     try {
       const auth = await this.getAuthState();
       if (!auth.loggedIn) {
@@ -514,23 +576,36 @@ class AppService {
       await this.ensureGameRootForGame(updated);
       await this.syncGameFolders(updated.id, { game: this.db.getGameById(updated.id) });
       this.emitChange();
+      await this.logger.info("Game refreshed.", { gameId: updated.id, title: updated.title });
       return this.db.getGameById(updated.id);
     } catch (error) {
       await this.db.markSyncFailure(gameId, error.message);
       this.emitChange();
+      await this.logger.error("Game refresh failed.", {
+        gameId: Number(gameId),
+        title: game.title,
+        message: error.message
+      });
       throw error;
     }
   }
 
   async refreshAllGames() {
+    await this.logger.info("Refreshing all games.");
     const games = this.db.getGames();
     for (const game of games) {
       try {
         await this.refreshGame(game.id);
-      } catch {
+      } catch (error) {
+        await this.logger.warn("Background refresh skipped failed game.", {
+          gameId: game.id,
+          title: game.title,
+          message: error.message
+        });
         // Keep background refresh resilient per game.
       }
     }
+    await this.logger.info("Finished refreshing all games.", { count: games.length });
     return this.getState();
   }
 
@@ -549,6 +624,10 @@ class AppService {
   }
 
   async processArchive({ archivePath, archiveName, archiveHash }) {
+    await this.logger.info("Processing detected archive.", {
+      archiveName,
+      archivePath
+    });
     const existing = this.db.findArchiveJobByPath(archivePath, archiveName);
     if (existing && existing.archive_hash === archiveHash && ["queued", "needs-review", "unmatched", "processing", "processed"].includes(existing.status)) {
       return existing;
@@ -588,10 +667,20 @@ class AppService {
     }
 
     this.emitChange();
+    await this.logger.info("Archive job updated.", {
+      archiveName,
+      status: job.status,
+      jobId: job.id
+    });
     return job;
   }
 
   async resolveArchiveMatch({ jobId, action, gameId }) {
+    await this.logger.info("Resolving archive job.", {
+      jobId: Number(jobId),
+      action,
+      gameId: gameId ? Number(gameId) : null
+    });
     const job = this.db.listArchiveJobs().find((entry) => entry.id === Number(jobId));
     if (!job) {
       throw new Error("Archive job not found.");
@@ -621,6 +710,11 @@ class AppService {
   }
 
   async extractJob(jobId, gameId, detectedVersion) {
+    await this.logger.info("Starting archive extraction.", {
+      jobId: Number(jobId),
+      gameId: Number(gameId),
+      detectedVersion: detectedVersion || null
+    });
     const state = await this.getState();
     const job = state.archiveJobs.find((entry) => entry.id === Number(jobId));
     const game = state.games.find((entry) => entry.id === Number(gameId));
@@ -678,12 +772,22 @@ class AppService {
       });
       await fs.unlink(job.archivePath).catch(() => {});
       await this.syncGameFolders(gameId, { game, rootOverride: installDirectory });
+      await this.logger.info("Archive extraction completed.", {
+        jobId: job.id,
+        gameId,
+        targetDirectory
+      });
     } catch (error) {
       await this.db.updateArchiveJob(job.id, {
         status: "failed",
         gameId,
         detectedVersion,
         errorText: error.message
+      });
+      await this.logger.error("Archive extraction failed.", {
+        jobId: job.id,
+        gameId,
+        message: error.message
       });
     } finally {
       this.activeExtractionHandle = null;
@@ -765,6 +869,11 @@ class AppService {
     const fileName = `${prefix}-${crypto.createHash("sha1").update(fetched.url).digest("hex")}${extension}`;
     const filePath = path.join(this.assetCachePath, fileName);
     await fs.writeFile(filePath, fetched.buffer);
+    await this.logger.info("Downloaded asset.", {
+      prefix,
+      assetUrl: fetched.url,
+      filePath
+    });
 
     return {
       sourceUrl: fetched.url,
@@ -826,6 +935,7 @@ class AppService {
   }
 
   async logout() {
+    await this.logger.info("Clearing authentication cookies.");
     const cookies = await this.authSession.cookies.get({ domain: "f95zone.to" });
     await Promise.all(
       cookies.map((cookie) =>
@@ -836,6 +946,7 @@ class AppService {
   }
 
   async dispose() {
+    await this.logger.info("Disposing application service.");
     if (this.activeExtractionHandle?.terminate) {
       this.activeExtractionHandle.terminate();
       this.activeExtractionHandle = null;
@@ -851,6 +962,7 @@ class AppService {
       });
       this.currentExtraction = null;
     }
+    await this.logger.info("Application service disposed.");
   }
 
   async syncAllManagedFolders() {
@@ -1022,6 +1134,7 @@ class AppService {
     const filePath = path.join(this.backupPath, `backup-${safeTimestamp}.json`);
     await fs.writeFile(filePath, JSON.stringify(snapshot, null, 2), "utf8");
     await this.pruneBackups();
+    await this.logger.info("Created backup.", { filePath });
     return filePath;
   }
 
