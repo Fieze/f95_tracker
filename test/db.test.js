@@ -82,6 +82,49 @@ test("applyDerivedInstallState hydrates folders into the game object", async (t)
   assert.equal(hydrated.folders.length, 2);
 });
 
+test("upsertGameFromThread preserves banner source url for asset reuse", async (t) => {
+  const { db, tempDir } = await createDb();
+  t.after(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const game = await db.upsertGameFromThread({
+    sourceUrl: "https://f95zone.to/threads/example-game.1/",
+    title: "Example Game",
+    threadTitle: "Example Game [v0.2]",
+    currentVersion: "0.2",
+    developer: "Dev",
+    engine: "Ren'Py",
+    threadStatus: "Ongoing",
+    overview: "Overview",
+    releaseDate: "2026-04-03",
+    changelog: "",
+    bannerImage: {
+      sourceUrl: "https://example.com/banner.jpg",
+      localPath: "C:\\cache\\banner.jpg"
+    },
+    screenshotImages: [],
+    tags: [],
+    downloadGroups: [],
+    rawOpHtml: "<article>same</article>",
+    rawOpText: "same",
+    parserDebug: {},
+    warnings: []
+  });
+
+  const hydrated = db.getGameById(game.id);
+  const refreshMetadata = db.getGameRefreshMetadata(game.id);
+
+  assert.deepEqual(hydrated.bannerImage, {
+    sourceUrl: "https://example.com/banner.jpg",
+    localPath: "C:\\cache\\banner.jpg"
+  });
+  assert.deepEqual(refreshMetadata.bannerImage, {
+    sourceUrl: "https://example.com/banner.jpg",
+    localPath: "C:\\cache\\banner.jpg"
+  });
+});
+
 test("upsertGameFromThread deduplicates entries with the same thread id but different slug", async (t) => {
   const { db, tempDir } = await createDb();
   t.after(async () => {

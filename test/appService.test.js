@@ -51,6 +51,109 @@ test("createBackup keeps only the newest three backups", async (t) => {
   assert.equal(files.filter((name) => name.endsWith(".json")).length, 3);
 });
 
+test("initialize triggers one background refresh for all games", async (t) => {
+  const userDataPath = await fs.mkdtemp(path.join(os.tmpdir(), "f95-app-service-init-"));
+  const service = new AppService({
+    userDataPath,
+    authSession: {
+      cookies: {
+        get: async () => []
+      }
+    },
+    onStateChanged: () => {}
+  });
+
+  let refreshCount = 0;
+  service.refreshAllGames = async () => {
+    refreshCount += 1;
+    return service.getState();
+  };
+
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  await service.initialize();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(refreshCount, 1);
+});
+
+test("hasThreadChanges returns false when the parsed thread content is unchanged", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  assert.equal(
+    service.hasThreadChanges(
+      {
+        sourceUrl: "https://f95zone.to/threads/example-game.123/",
+        rawOpHtml: "<article>same</article>",
+        rawOpText: "same"
+      },
+      {
+        sourceUrl: "https://f95zone.to/threads/example-game.123/",
+        rawOpHtml: "<article>same</article>",
+        rawOpText: "same"
+      }
+    ),
+    false
+  );
+});
+
+test("hydrateThreadAssets reuses cached assets with the same source url", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const bannerPath = path.join(userDataPath, "thread-assets", "banner-existing.jpg");
+  const screenshotPath = path.join(userDataPath, "thread-assets", "shot-existing.jpg");
+  await fs.mkdir(path.dirname(bannerPath), { recursive: true });
+  await fs.writeFile(bannerPath, "banner");
+  await fs.writeFile(screenshotPath, "shot");
+
+  let downloadCount = 0;
+  service.downloadAsset = async () => {
+    downloadCount += 1;
+    throw new Error("download should not be called");
+  };
+
+  const hydrated = await service.hydrateThreadAssets(
+    {
+      bannerImageUrl: "https://example.com/banner.jpg",
+      screenshotImageUrls: ["https://example.com/shot-1.jpg"],
+      warnings: []
+    },
+    {
+      bannerImage: {
+        sourceUrl: "https://example.com/banner.jpg",
+        localPath: bannerPath
+      },
+      screenshotImages: [
+        {
+          sourceUrl: "https://example.com/shot-1.jpg",
+          localPath: screenshotPath
+        }
+      ]
+    }
+  );
+
+  assert.equal(downloadCount, 0);
+  assert.deepEqual(hydrated.bannerImage, {
+    sourceUrl: "https://example.com/banner.jpg",
+    localPath: bannerPath
+  });
+  assert.deepEqual(hydrated.screenshotImages, [
+    {
+      sourceUrl: "https://example.com/shot-1.jpg",
+      localPath: screenshotPath
+    }
+  ]);
+});
+
 test("listLaunchExecutables only scans direct .exe files and recommends the best match", async (t) => {
   const { service, userDataPath } = await createService();
   t.after(async () => {

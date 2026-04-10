@@ -137,6 +137,7 @@ class DatabaseService {
     this.ensureColumn("games", "thread_id", "TEXT");
     this.ensureColumn("games", "thread_title", "TEXT");
     this.ensureColumn("games", "release_date", "TEXT");
+    this.ensureColumn("games", "banner_image_url", "TEXT");
     this.ensureColumn("games", "banner_image_path", "TEXT");
     this.ensureColumn("games", "screenshot_images", "TEXT DEFAULT '[]'");
     this.ensureColumn("games", "thread_status", "TEXT");
@@ -206,7 +207,7 @@ class DatabaseService {
       this.db.run(
         `UPDATE games SET
           thread_id = ?, thread_url = ?, title = ?, thread_title = ?, has_seasons = ?, current_version = ?, developer = ?, engine = ?,
-          thread_status = ?, overview = ?, release_date = ?, changelog = ?, banner_image_path = ?, screenshot_images = ?, tags = ?,
+          thread_status = ?, overview = ?, release_date = ?, changelog = ?, banner_image_url = ?, banner_image_path = ?, screenshot_images = ?, tags = ?,
           aliases = ?, raw_op_html = ?, raw_op_text = ?, parser_debug = ?, parser_warnings = ?, last_sync_at = ?, last_sync_status = ?
         WHERE id = ?`,
         [
@@ -222,6 +223,7 @@ class DatabaseService {
           parsedThread.overview,
           parsedThread.releaseDate,
           parsedThread.changelog,
+          parsedThread.bannerImage?.sourceUrl || null,
           parsedThread.bannerImage?.localPath || null,
           JSON.stringify(parsedThread.screenshotImages || []),
           JSON.stringify(parsedThread.tags),
@@ -239,8 +241,8 @@ class DatabaseService {
       this.db.run(
         `INSERT INTO games (
           thread_id, thread_url, title, thread_title, has_seasons, current_version, developer, engine, thread_status, overview, release_date, changelog,
-          banner_image_path, screenshot_images, tags, aliases, raw_op_html, raw_op_text, parser_debug, parser_warnings, last_sync_at, last_sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          banner_image_url, banner_image_path, screenshot_images, tags, aliases, raw_op_html, raw_op_text, parser_debug, parser_warnings, last_sync_at, last_sync_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           threadId,
           parsedThread.sourceUrl,
@@ -254,6 +256,7 @@ class DatabaseService {
           parsedThread.overview,
           parsedThread.releaseDate,
           parsedThread.changelog,
+          parsedThread.bannerImage?.sourceUrl || null,
           parsedThread.bannerImage?.localPath || null,
           JSON.stringify(parsedThread.screenshotImages || []),
           JSON.stringify(parsedThread.tags),
@@ -296,6 +299,17 @@ class DatabaseService {
     await this.persist();
   }
 
+  async markSyncSuccess(gameId, warnings = []) {
+    const now = new Date().toISOString();
+    this.db.run(
+      "UPDATE games SET last_sync_at = ?, last_sync_status = 'success', parser_warnings = ? WHERE id = ?",
+      [now, JSON.stringify(warnings || []), gameId]
+    );
+    this.insertSyncRun(gameId, true, warnings, null);
+    await this.persist();
+    return this.getGameById(gameId);
+  }
+
   insertSyncRun(gameId, success, warnings, errorText) {
     this.db.run(
       "INSERT INTO sync_runs (game_id, success, warnings, error_text, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -319,6 +333,30 @@ class DatabaseService {
     const links = this.query("SELECT * FROM download_links WHERE game_id = ? ORDER BY group_label, label", [gameId]);
     const folders = this.query("SELECT * FROM game_folders WHERE game_id = ? ORDER BY sort_rank ASC, id ASC", [gameId]);
     return this.hydrateGame(row, links, folders);
+  }
+
+  getGameRefreshMetadata(gameId) {
+    const row = this.first(
+      "SELECT id, thread_url, raw_op_html, raw_op_text, banner_image_url, banner_image_path, screenshot_images FROM games WHERE id = ?",
+      [gameId]
+    );
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      sourceUrl: row.thread_url,
+      rawOpHtml: row.raw_op_html || "",
+      rawOpText: row.raw_op_text || "",
+      bannerImage: row.banner_image_path
+        ? {
+            sourceUrl: row.banner_image_url || null,
+            localPath: row.banner_image_path
+          }
+        : null,
+      screenshotImages: safeJsonParse(row.screenshot_images, [])
+    };
   }
 
   listGameFolders(gameId) {
@@ -835,6 +873,7 @@ class DatabaseService {
       changelog: row.changelog,
       bannerImage: row.banner_image_path
         ? {
+            sourceUrl: row.banner_image_url || null,
             localPath: row.banner_image_path
           }
         : null,

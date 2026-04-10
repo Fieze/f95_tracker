@@ -38,6 +38,7 @@ class AppService {
     this.activeExtractionHandle = null;
     this.folderSyncTimer = null;
     this.backupTimer = null;
+    this.startupRefreshPromise = null;
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
     this.lastExtractionProgressEmitAt = 0;
@@ -65,6 +66,7 @@ class AppService {
     await this.pollManagedFolders({ emitOnChange: false });
     await this.createBackup();
     this.startBackupScheduler();
+    void this.startStartupRefresh();
     await this.logger.info("Application service initialized.");
   }
 
@@ -540,6 +542,26 @@ class AppService {
     this.startManagedFolderMonitor();
   }
 
+  startStartupRefresh() {
+    if (this.startupRefreshPromise) {
+      return this.startupRefreshPromise;
+    }
+
+    this.startupRefreshPromise = Promise.resolve()
+      .then(async () => {
+        await this.logger.info("Starting initial refresh for all games.");
+        return this.refreshAllGames();
+      })
+      .catch(async (error) => {
+        await this.logger.error("Initial refresh for all games failed.", error);
+      })
+      .finally(() => {
+        this.startupRefreshPromise = null;
+      });
+
+    return this.startupRefreshPromise;
+  }
+
   async addThread(threadUrl) {
     const normalizedUrl = normalizeThreadUrl(threadUrl);
     await this.logger.info("Adding thread.", { threadUrl: normalizedUrl });
@@ -560,6 +582,7 @@ class AppService {
 
   async refreshGame(gameId) {
     const game = this.db.getGameById(gameId);
+    const refreshMetadata = this.db.getGameRefreshMetadata(gameId);
     if (!game) {
       throw new Error("Game not found.");
     }
@@ -571,7 +594,16 @@ class AppService {
       }
       const thread = await this.fetcher.fetchThread(game.threadUrl);
       const parsed = parseThread(thread.html, thread.url);
-      const enriched = await this.hydrateThreadAssets(parsed);
+      if (!this.hasThreadChanges(refreshMetadata, parsed)) {
+        await this.db.markSyncSuccess(game.id, parsed.warnings || []);
+        await this.logger.info("Game refresh detected no thread changes.", {
+          gameId: game.id,
+          title: game.title
+        });
+        return this.db.getGameById(game.id);
+      }
+
+      const enriched = await this.hydrateThreadAssets(parsed, refreshMetadata);
       const updated = await this.db.upsertGameFromThread(enriched);
       await this.ensureGameRootForGame(updated);
       await this.syncGameFolders(updated.id, { game: this.db.getGameById(updated.id) });
@@ -834,22 +866,30 @@ class AppService {
     }
   }
 
-  async hydrateThreadAssets(parsedThread) {
+  async hydrateThreadAssets(parsedThread, existingAssets = null) {
     const warnings = [...(parsedThread.warnings || [])];
     let bannerImage = null;
     const screenshotImages = [];
 
     if (parsedThread.bannerImageUrl) {
       try {
-        bannerImage = await this.downloadAsset(parsedThread.bannerImageUrl, "banner");
+        bannerImage = await this.resolveThreadAsset(parsedThread.bannerImageUrl, "banner", existingAssets?.bannerImage || null);
       } catch (error) {
         warnings.push(`Banner image could not be downloaded: ${error.message}`);
       }
     }
 
+    const existingScreenshots = new Map(
+      (existingAssets?.screenshotImages || [])
+        .filter((asset) => asset?.sourceUrl && asset?.localPath)
+        .map((asset) => [asset.sourceUrl, asset])
+    );
+
     for (const screenshotUrl of parsedThread.screenshotImageUrls || []) {
       try {
-        screenshotImages.push(await this.downloadAsset(screenshotUrl, "screenshot"));
+        screenshotImages.push(
+          await this.resolveThreadAsset(screenshotUrl, "screenshot", existingScreenshots.get(screenshotUrl) || null)
+        );
       } catch (error) {
         warnings.push(`Screenshot could not be downloaded: ${error.message}`);
       }
@@ -861,6 +901,45 @@ class AppService {
       screenshotImages,
       warnings
     };
+  }
+
+  hasThreadChanges(existingThread, parsedThread) {
+    if (!existingThread) {
+      return true;
+    }
+
+    return (
+      String(existingThread.sourceUrl || "") !== String(parsedThread.sourceUrl || "") ||
+      String(existingThread.rawOpHtml || "") !== String(parsedThread.rawOpHtml || "") ||
+      String(existingThread.rawOpText || "") !== String(parsedThread.rawOpText || "")
+    );
+  }
+
+  async resolveThreadAsset(assetUrl, prefix, existingAsset = null) {
+    if (
+      existingAsset?.sourceUrl &&
+      existingAsset.sourceUrl === assetUrl &&
+      existingAsset.localPath &&
+      (await this.assetExists(existingAsset.localPath))
+    ) {
+      await this.logger.info("Reused cached asset.", {
+        prefix,
+        assetUrl,
+        filePath: existingAsset.localPath
+      });
+      return existingAsset;
+    }
+
+    return this.downloadAsset(assetUrl, prefix);
+  }
+
+  async assetExists(filePath) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async downloadAsset(assetUrl, prefix) {
