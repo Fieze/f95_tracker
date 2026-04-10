@@ -57,12 +57,15 @@ class AppService {
     this.downloadJobs = [];
     this.nextDownloadJobId = 1;
     this.activeDownloadControllers = new Map();
+    this.processedArchiveRemovalTimers = new Map();
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
     this.lastExtractionProgressEmitAt = 0;
     this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
     this.fetcher = new ThreadFetcher(authSession);
+    this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
+    this.extractArchiveWithProgress = extractArchiveWithProgress;
     this.folderWatcher = new FolderWatcher({
       onArchiveDetected: async (payload) => this.processArchive(payload)
     });
@@ -77,7 +80,7 @@ class AppService {
     });
     await this.db.initialize();
     await this.db.resetInterruptedArchiveJobs();
-    await this.pruneCompletedArchiveJobs();
+    await this.pruneMissingArchiveJobs();
     await fs.mkdir(this.assetCachePath, { recursive: true });
     const settings = this.db.getSettings();
     await this.applyRuntimeSettings(settings);
@@ -94,6 +97,7 @@ class AppService {
   }
 
   async getState() {
+    await this.pruneMissingArchiveJobs();
     await this.refreshManagedFoldersIfStale();
     return {
       settings: this.db.getSettings(),
@@ -691,18 +695,74 @@ class AppService {
     return this.getState();
   }
 
-  async pruneCompletedArchiveJobs() {
-    const completedJobs = this.db
-      .listArchiveJobs()
-      .filter((job) => job.status === "processed" && job.archivePath);
+  async pruneMissingArchiveJobs() {
+    const jobsWithPaths = this.db.listArchiveJobs().filter((job) => job.archivePath);
+    let changed = false;
 
-    for (const job of completedJobs) {
+    for (const job of jobsWithPaths) {
       try {
         await fs.access(job.archivePath);
       } catch {
         await this.db.deleteArchiveJob(job.id);
+        changed = true;
       }
     }
+
+    if (changed) {
+      this.emitChange();
+    }
+  }
+
+  async deleteArchiveFile(jobId) {
+    const job = this.db.listArchiveJobs().find((entry) => entry.id === Number(jobId));
+    if (!job) {
+      throw new Error("Archive job not found.");
+    }
+
+    this.cancelProcessedArchiveRemoval(job.id);
+
+    if (job.archivePath) {
+      await fs.unlink(job.archivePath).catch((error) => {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      });
+    }
+
+    await this.db.deleteArchiveJob(job.id);
+    this.emitChange();
+    return this.getState();
+  }
+
+  scheduleProcessedArchiveRemoval(jobId, delayMs = 10000) {
+    this.cancelProcessedArchiveRemoval(jobId);
+    const timer = setTimeout(async () => {
+      try {
+        const job = this.db.listArchiveJobs().find((entry) => entry.id === Number(jobId));
+        if (!job || job.status !== "processed") {
+          return;
+        }
+        await this.db.deleteArchiveJob(job.id);
+        this.emitChange();
+      } catch (error) {
+        await this.logger.warn("Failed to prune processed archive job after delay.", {
+          jobId: Number(jobId),
+          message: error.message
+        });
+      } finally {
+        this.processedArchiveRemovalTimers.delete(Number(jobId));
+      }
+    }, delayMs);
+    this.processedArchiveRemovalTimers.set(Number(jobId), timer);
+  }
+
+  cancelProcessedArchiveRemoval(jobId) {
+    const timer = this.processedArchiveRemovalTimers.get(Number(jobId));
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.processedArchiveRemovalTimers.delete(Number(jobId));
   }
 
   async processArchive({ archivePath, archiveName, archiveHash, gameId = null, detectedVersion = null, autoExtract = false }) {
@@ -741,6 +801,7 @@ class AppService {
 
     let job;
     if (existing) {
+      this.cancelProcessedArchiveRemoval(existing.id);
       job = await this.db.updateArchiveJob(existing.id, {
         archiveHash,
         gameId: payload.gameId,
@@ -784,15 +845,6 @@ class AppService {
       throw new Error("Archive job not found.");
     }
 
-    if (action === "skip") {
-      await this.db.updateArchiveJob(job.id, {
-        status: "skipped",
-        errorText: "Skipped by user."
-      });
-      this.emitChange();
-      return this.getState();
-    }
-
     if (!gameId) {
       throw new Error("A game selection is required.");
     }
@@ -828,35 +880,35 @@ class AppService {
       return;
     }
 
-    const installDirectory = buildInstallDirectory(state.settings.installRoot, game.title);
-    await fs.mkdir(installDirectory, { recursive: true });
-    const archiveHasSingleRootFolder = await archiveHasSingleRootDirectory(job.archivePath);
-    const versionForFolder = sanitizePathSegment(detectedVersion || game.currentVersion || "files");
-    const targetDirectory = archiveHasSingleRootFolder
-      ? installDirectory
-      : buildVersionedInstallDirectory(installDirectory, game.title, versionForFolder);
-    const archiveStats = await fs.stat(job.archivePath);
-    const startedAt = new Date().toISOString();
-    this.lastExtractionProgressLogAt = 0;
-    this.currentExtraction = {
-      jobId: job.id,
-      archiveName: job.archiveName,
-      archivePath: job.archivePath,
-      startedAt,
-      estimatedTotalMs: this.estimateExtractionDurationMs(job.archivePath, archiveStats.size),
-      archiveSizeBytes: archiveStats.size,
-      currentFile: "",
-      processedFiles: 0,
-      totalFiles: 0
-    };
-    await this.db.updateArchiveJob(job.id, {
-      status: "processing",
-      gameId,
-      detectedVersion
-    });
-    this.emitChange();
-
     try {
+      const installDirectory = buildInstallDirectory(state.settings.installRoot, game.title);
+      await fs.mkdir(installDirectory, { recursive: true });
+      const archiveHasSingleRootFolder = await this.archiveHasSingleRootDirectory(job.archivePath);
+      const versionForFolder = sanitizePathSegment(detectedVersion || game.currentVersion || "files");
+      const targetDirectory = archiveHasSingleRootFolder
+        ? installDirectory
+        : buildVersionedInstallDirectory(installDirectory, game.title, versionForFolder);
+      const archiveStats = await fs.stat(job.archivePath);
+      const startedAt = new Date().toISOString();
+      this.lastExtractionProgressLogAt = 0;
+      this.currentExtraction = {
+        jobId: job.id,
+        archiveName: job.archiveName,
+        archivePath: job.archivePath,
+        startedAt,
+        estimatedTotalMs: this.estimateExtractionDurationMs(job.archivePath, archiveStats.size),
+        archiveSizeBytes: archiveStats.size,
+        currentFile: "",
+        processedFiles: 0,
+        totalFiles: 0
+      };
+      await this.db.updateArchiveJob(job.id, {
+        status: "processing",
+        gameId,
+        detectedVersion
+      });
+      this.emitChange();
+
       await fs.mkdir(targetDirectory, { recursive: true });
       await this.logger.info("Archive extraction prepared.", {
         jobId: job.id,
@@ -868,7 +920,7 @@ class AppService {
         targetDirectory,
         detectedVersion: detectedVersion || null
       });
-      this.activeExtractionHandle = extractArchiveWithProgress(job.archivePath, targetDirectory, (progress) => {
+      this.activeExtractionHandle = this.extractArchiveWithProgress(job.archivePath, targetDirectory, (progress) => {
         this.updateExtractionProgress(progress);
       });
       await this.activeExtractionHandle.completion;
@@ -881,6 +933,7 @@ class AppService {
         extractedTo: targetDirectory,
         errorText: null
       });
+      this.scheduleProcessedArchiveRemoval(job.id);
       await fs.unlink(job.archivePath).catch(() => {});
       await this.syncGameFolders(gameId, { game, rootOverride: installDirectory });
       await this.logger.info("Archive extraction completed.", {
@@ -893,6 +946,7 @@ class AppService {
         totalFiles: this.currentExtraction?.totalFiles || 0
       });
     } catch (error) {
+      this.cancelProcessedArchiveRemoval(job.id);
       await this.db.updateArchiveJob(job.id, {
         status: "failed",
         gameId,
@@ -1518,6 +1572,10 @@ class AppService {
       controller.abort();
     }
     this.activeDownloadControllers.clear();
+    for (const timer of this.processedArchiveRemovalTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.processedArchiveRemovalTimers.clear();
     this.downloadJobs = this.downloadJobs.map((job) => {
       if (["downloading", "resolving", "opening_host", "awaiting_download"].includes(job.status)) {
         return {

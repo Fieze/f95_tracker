@@ -58,25 +58,16 @@
         </section>
       </main>
 
-      <section id="archive-queue-bar" class="archive-queue-bar panel is-collapsed is-pending" aria-label="Archive Queue">
-        <button
-          id="archive-queue-toggle"
-          class="archive-queue-toggle"
-          type="button"
-          aria-expanded="false"
-          aria-controls="archive-queue-body"
-        >
+      <section id="archive-queue-bar" class="archive-queue-bar panel is-pending" aria-label="Archive Queue">
+        <div class="archive-queue-header">
           <span class="archive-queue-title-wrap">
-            <span class="archive-queue-title">Archive Queue</span>
+            <span class="archive-queue-title">Activity</span>
             <span id="archive-queue-summary" class="archive-queue-summary">No archives detected yet.</span>
           </span>
           <span class="archive-queue-toggle-meta">
             <span id="archive-queue-count" class="archive-queue-count">0</span>
-            <svg class="archive-queue-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M9 6l6 6-6 6" />
-            </svg>
           </span>
-        </button>
+        </div>
         <div id="archive-queue-body" class="archive-queue-body">
           <div id="active-downloads-section" class="active-downloads-section hidden">
             <div class="archive-queue-section-heading">

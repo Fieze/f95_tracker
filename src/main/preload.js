@@ -26,7 +26,9 @@ contextBridge.exposeInMainWorld("f95App", {
   moveInstallPath: (gameId) => ipcRenderer.invoke("games:moveInstallPath", { gameId }),
   refreshAllGames: () => ipcRenderer.invoke("games:refreshAll"),
   resolveArchiveMatch: (payload) => ipcRenderer.invoke("jobs:decision", payload),
+  deleteArchiveFile: (jobId) => ipcRenderer.invoke("jobs:deleteFile", { jobId }),
   startDownload: (payload) => ipcRenderer.invoke("downloads:start", payload),
+  cancelDownload: (jobId) => ipcRenderer.invoke("downloads:cancel", { jobId }),
   openLink: (url) => ipcRenderer.invoke("links:open", url),
   onStateChanged: (handler) => ipcRenderer.on("state:changed", handler)
 });

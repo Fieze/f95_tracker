@@ -181,7 +181,7 @@ function parseThreadTitle(rawTitle) {
 }
 
 function parseDownloadLabel(text) {
-  const match = String(text || "").match(/^(win\/linux|windows|win)(?:\s*\([^)]*\))?\s*:/i);
+  const match = String(text || "").match(/^(win\/linux\/mac|win\/linux|windows|win)(?:\s*\([^)]*\))?\s*:/i);
   return match ? match[1] : null;
 }
 
@@ -198,7 +198,7 @@ function isDownloadsHeaderLine(text) {
 }
 
 function isDownloadRow(text) {
-  return /^(win\/linux|windows|win|mac|android)(?:\s*\([^)]*\))?\s*:/i.test(String(text || "").trim());
+  return /^(win\/linux\/mac|win\/linux|windows|win|mac|android)(?:\s*\([^)]*\))?\s*:/i.test(String(text || "").trim());
 }
 
 function isBlockBoundary(tagName) {

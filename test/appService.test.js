@@ -984,3 +984,132 @@ test("processArchive can force a game match and trigger extraction", async (t) =
   assert.equal(extractCalls[0].gameId, game.id);
   assert.equal(extractCalls[0].detectedVersion, "2.0");
 });
+
+test("pruneMissingArchiveJobs removes queue entries whose files no longer exist", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  await service.db.createArchiveJob({
+    archivePath: path.join(userDataPath, "missing.zip"),
+    archiveName: "missing.zip",
+    archiveHash: "missing",
+    status: "queued",
+    confidence: "high",
+    matchCandidates: []
+  });
+
+  await service.pruneMissingArchiveJobs();
+
+  assert.equal(service.db.listArchiveJobs().length, 0);
+});
+
+test("deleteArchiveFile removes the file and queue entry", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const archivePath = path.join(userDataPath, "delete-me.zip");
+  await fs.writeFile(archivePath, "archive");
+  const job = await service.db.createArchiveJob({
+    archivePath,
+    archiveName: "delete-me.zip",
+    archiveHash: "delete",
+    status: "queued",
+    confidence: "high",
+    matchCandidates: []
+  });
+
+  await service.deleteArchiveFile(job.id);
+
+  await assert.rejects(() => fs.access(archivePath));
+  assert.equal(service.db.listArchiveJobs().length, 0);
+});
+
+test("processed archive jobs are removed after the retention delay", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const job = await service.db.createArchiveJob({
+    archivePath: path.join(userDataPath, "processed.zip"),
+    archiveName: "processed.zip",
+    archiveHash: "processed",
+    status: "processed",
+    confidence: "high",
+    matchCandidates: []
+  });
+
+  service.scheduleProcessedArchiveRemoval(job.id, 20);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(service.db.listArchiveJobs().length, 0);
+});
+
+test("extractJob marks invalid archives as failed instead of throwing through IPC", async (t) => {
+  const { service, userDataPath } = await createService();
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const installRoot = path.join(userDataPath, "installs");
+  const archivePath = path.join(userDataPath, "broken.rar");
+  await fs.mkdir(installRoot, { recursive: true });
+  await fs.writeFile(archivePath, "not a real archive");
+  await service.db.saveSettings({
+    watchFolder: path.join(userDataPath, "watch"),
+    installRoot,
+    syncIntervalMinutes: 30
+  });
+
+  const game = await service.db.upsertGameFromThread({
+    sourceUrl: "https://f95zone.to/threads/broken-archive.4040/",
+    title: "Broken Archive",
+    threadTitle: "Broken Archive",
+    currentVersion: "0.9.2",
+    developer: "Dev",
+    engine: "Ren'Py",
+    threadStatus: "Ongoing",
+    overview: "",
+    releaseDate: "",
+    changelog: "",
+    bannerImage: null,
+    screenshotImages: [],
+    tags: [],
+    warnings: [],
+    aliases: [],
+    rawOpHtml: "",
+    rawOpText: "",
+    parserDebug: {},
+    downloadGroups: []
+  });
+
+  const job = await service.db.createArchiveJob({
+    archivePath,
+    archiveName: "Midnight_Sin_v0.9.2.rar",
+    archiveHash: "broken",
+    gameId: game.id,
+    detectedVersion: "0.9.2",
+    status: "queued",
+    confidence: "high",
+    matchCandidates: []
+  });
+
+  service.archiveHasSingleRootDirectory = async () => {
+    throw new Error(`ERROR: ${archivePath} : Cannot open the file as archive`);
+  };
+
+  await assert.doesNotReject(() => service.extractJob(job.id, game.id, "0.9.2"));
+
+  const failedJob = service.db.listArchiveJobs().find((entry) => entry.id === job.id);
+  assert.equal(failedJob.status, "failed");
+  assert.match(failedJob.errorText, /cannot open the file as archive/i);
+  assert.equal(service.currentExtraction, null);
+});

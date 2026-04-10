@@ -99,6 +99,12 @@ function extractArchiveWithProgress(archivePath, targetPath, onProgress) {
       if (settled) {
         return;
       }
+      if (code === 0 && !signal) {
+        settled = true;
+        cleanup();
+        resolve();
+        return;
+      }
       settled = true;
       cleanup();
       reject(new Error(`Extraction worker exited unexpectedly (${signal || code}).`));

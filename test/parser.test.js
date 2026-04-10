@@ -178,6 +178,31 @@ test("parseThread finds downloads when the label includes a version in parenthes
   assert.ok(result.warnings.every((warning) => !/No download links/i.test(warning)));
 });
 
+test("parseThread finds downloads when win linux mac are combined in one label", () => {
+  const html = `
+    <html>
+      <body>
+        <h1 class="p-title-value">[Ren'Py] Summer Scent [v0.6.7a]</h1>
+        <article class="message-threadStarterPost">
+          <article class="message-body js-selectToQuote">
+            <div class="bbWrapper">
+              <p><strong>DOWNLOAD</strong></p>
+              Win/Linux/Mac: <a href="https://example.org/a">Buzzheavier</a> - <a href="https://example.org/b">Mixdrop</a> - <a href="https://example.org/c">Pixeldrain</a><br>
+              Android (0.6.5a): <a href="https://example.org/android">GoFile</a><br>
+              Extras: <a href="https://example.org/extra">Fan Sig 1</a>
+            </div>
+          </article>
+        </article>
+      </body>
+    </html>
+  `;
+
+  const result = parseThread(html, "https://f95zone.to/threads/example.8/");
+  assert.deepEqual(result.downloadGroups.map((group) => group.label), ["Win/Linux/Mac"]);
+  assert.equal(result.downloadGroups[0].links.length, 3);
+  assert.ok(result.warnings.every((warning) => !/No download links/i.test(warning)));
+});
+
 test("parseThread only uses the first download block after DOWNLOADS and skips spoiler content", () => {
   const html = `
     <html>

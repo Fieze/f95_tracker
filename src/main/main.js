@@ -35,7 +35,16 @@ function isSafeBrowserUrl(candidateUrl) {
   }
 }
 
-function isSupportedDirectDownloadUrl(candidateUrl) {
+function isSupportedDirectDownload(candidateUrl, label = "") {
+  const normalizedLabel = String(label || "").toLowerCase();
+  if (
+    normalizedLabel.includes("pixeldrain") ||
+    normalizedLabel.includes("vikingfile") ||
+    normalizedLabel.includes("vik1ngfile")
+  ) {
+    return true;
+  }
+
   try {
     const host = new URL(String(candidateUrl || "").trim()).host.toLowerCase();
     return (
@@ -378,7 +387,7 @@ async function createLoginWindow() {
 
 async function createDownloadWindow(payload) {
   const targetUrl = String(payload?.url || "").trim();
-  if (!isSupportedDirectDownloadUrl(targetUrl)) {
+  if (!isSupportedDirectDownload(targetUrl, payload?.label || "")) {
     throw new Error("Direct in-app downloads are currently only supported for Vikingfile and Pixeldrain links.");
   }
 
@@ -603,7 +612,21 @@ function bindIpc() {
   );
   handle("games:refreshAll", async () => appService.refreshAllGames());
   handle("jobs:decision", async (_event, payload) => appService.resolveArchiveMatch(payload));
+  handle("jobs:deleteFile", async (_event, payload) => appService.deleteArchiveFile(payload?.jobId));
   handle("downloads:start", async (_event, payload) => createDownloadWindow(payload));
+  handle("downloads:cancel", async (_event, payload) => {
+    const jobId = Number(payload?.jobId);
+    if (!Number.isFinite(jobId)) {
+      throw new Error("A valid download job is required.");
+    }
+
+    if (downloadWindowState?.jobId === jobId) {
+      closeDownloadWindow();
+    }
+
+    appService.cancelDownloadJob(jobId, "Download canceled by user.");
+    return appService.getState();
+  });
   handle("links:open", async (_event, url) => {
     await shell.openExternal(url);
     return { ok: true };

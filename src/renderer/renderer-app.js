@@ -17,7 +17,6 @@ const state = {
   selectedGameId: null,
   editingFolderId: null,
   openOverlay: null,
-  archiveQueueExpanded: false,
   archiveQueueReady: false
 };
 
@@ -57,6 +56,26 @@ function createPlayButton(label = "Play") {
   path.setAttribute("d", "M8 6L18 12L8 18V6Z");
   icon.appendChild(path);
   button.prepend(icon);
+  return button;
+}
+
+function createCancelDownloadButton(title = "Cancel download") {
+  const button = createNode("button", "download-cancel-button", "");
+  button.type = "button";
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  const icon = createSvgNode("svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  const rect = createSvgNode("rect");
+  rect.setAttribute("x", "7");
+  rect.setAttribute("y", "7");
+  rect.setAttribute("width", "10");
+  rect.setAttribute("height", "10");
+  rect.setAttribute("rx", "1.5");
+  rect.setAttribute("ry", "1.5");
+  icon.appendChild(rect);
+  button.appendChild(icon);
   return button;
 }
 
@@ -179,6 +198,10 @@ function getActiveDownloadJobs() {
   );
 }
 
+function isCancelableDownloadJob(job) {
+  return ["opening_host", "awaiting_download", "resolving", "downloading"].includes(String(job?.status || ""));
+}
+
 function getDownloadJobForLink(gameId, link) {
   return (state.downloadJobs || []).find((job) => {
     if (Number(job.gameId) !== Number(gameId)) {
@@ -193,7 +216,16 @@ function getDownloadJobForLink(gameId, link) {
   }) || null;
 }
 
-function isSupportedDirectDownloadUrl(url) {
+function isSupportedDirectDownload(url, label = "") {
+  const normalizedLabel = String(label || "").toLowerCase();
+  if (
+    normalizedLabel.includes("pixeldrain") ||
+    normalizedLabel.includes("vikingfile") ||
+    normalizedLabel.includes("vik1ngfile")
+  ) {
+    return true;
+  }
+
   try {
     const host = new URL(String(url || "").trim()).host.toLowerCase();
     return (
@@ -379,6 +411,10 @@ function getArchiveQueueOpenCount(jobs = state.archiveJobs) {
   return (jobs || []).filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status)).length;
 }
 
+function getOpenArchiveJobs(jobs = state.archiveJobs) {
+  return (jobs || []).filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status));
+}
+
 function getActiveDownloadCount(downloadJobs = state.downloadJobs) {
   return (downloadJobs || []).filter((job) =>
     ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
@@ -388,24 +424,17 @@ function getActiveDownloadCount(downloadJobs = state.downloadJobs) {
 function updateArchiveQueueAutoExpand(previousJobs, nextJobs, previousDownloadJobs, nextDownloadJobs) {
   const previousCount = getArchiveQueueOpenCount(previousJobs || []);
   const nextCount = getArchiveQueueOpenCount(nextJobs || []);
-  const previousTotal = (previousJobs || []).length;
-  const nextTotal = (nextJobs || []).length;
   const previousActiveDownloads = getActiveDownloadCount(previousDownloadJobs || []);
   const nextActiveDownloads = getActiveDownloadCount(nextDownloadJobs || []);
 
   if (!archiveQueueInitialized) {
-    state.archiveQueueExpanded = nextTotal > 0 || nextActiveDownloads > 0;
     state.archiveQueueReady = true;
     archiveQueueInitialized = true;
     return;
   }
 
-  if (
-    nextCount > previousCount ||
-    nextTotal > previousTotal ||
-    nextActiveDownloads > previousActiveDownloads
-  ) {
-    state.archiveQueueExpanded = true;
+  if (nextCount > previousCount || nextActiveDownloads > previousActiveDownloads) {
+    state.archiveQueueReady = true;
   }
 }
 
@@ -628,7 +657,7 @@ function buildGameDetailsCard(selectedGame) {
       const job = getDownloadJobForLink(selectedGame.id, link);
       const status = job?.status || "";
       const busy = ["opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
-      const supportsDirectDownload = isSupportedDirectDownloadUrl(link.url);
+      const supportsDirectDownload = isSupportedDirectDownload(link.url, link.label);
       const labelWrap = createNode("div", "download-meta");
       const actions = createNode("div", "download-actions");
       const primaryButton = createNode(
@@ -690,6 +719,18 @@ function buildGameDetailsCard(selectedGame) {
 
       row.appendChild(labelWrap);
       actions.appendChild(primaryButton);
+      if (job && isCancelableDownloadJob(job)) {
+        const cancelButton = createCancelDownloadButton();
+        cancelButton.addEventListener("click", async () => {
+          try {
+            await window.f95App.cancelDownload(job.id);
+            await reloadState();
+          } catch (error) {
+            alert(error.message);
+          }
+        });
+        actions.appendChild(cancelButton);
+      }
       if (secondaryButton) {
         actions.appendChild(secondaryButton);
       }
@@ -940,17 +981,18 @@ function renderJobs() {
   renderArchiveQueueBar();
   const container = $("#jobs-list");
   container.innerHTML = "";
+  const openArchiveJobs = getOpenArchiveJobs();
 
-  if (state.archiveJobs.length === 0) {
+  if (openArchiveJobs.length === 0) {
     container.className = "jobs-list empty-state";
-    container.textContent = "No archives detected yet.";
+    container.textContent = "No archives need attention.";
     return;
   }
 
   container.className = "jobs-list";
   const template = $("#job-card-template");
 
-  state.archiveJobs.forEach((job) => {
+  openArchiveJobs.forEach((job) => {
     const fragment = template.content.cloneNode(true);
     const title = fragment.querySelector(".job-title");
     const pathNode = fragment.querySelector(".job-path");
@@ -984,7 +1026,7 @@ function renderJobs() {
       gameSelect.appendChild(option);
     });
 
-    const isActionable = !["processed", "processing", "skipped"].includes(job.status);
+    const isActionable = !["processed", "processing"].includes(job.status);
     if (isActionable) {
       const extractButton = createNode("button", "choice-button", "Extract");
       extractButton.type = "button";
@@ -1003,21 +1045,34 @@ function renderJobs() {
       });
       actions.appendChild(extractButton);
 
-      const skip = createNode("button", "choice-button", "Skip");
-      skip.type = "button";
-      skip.addEventListener("click", async () => {
-        await window.f95App.resolveArchiveMatch({
-          jobId: job.id,
-          action: "skip"
-        });
+      const deleteButton = createNode("button", "choice-button", "Delete File");
+      deleteButton.type = "button";
+      deleteButton.addEventListener("click", async () => {
+        const confirmed = window.confirm(`Delete "${job.archiveName}" from disk and remove it from the archive queue?`);
+        if (!confirmed) {
+          return;
+        }
+        await window.f95App.deleteArchiveFile(job.id);
         await reloadState();
       });
-      actions.appendChild(skip);
+      actions.appendChild(deleteButton);
     } else {
       gameSelect.disabled = true;
       if (job.status === "processed") {
         const done = createNode("span", "job-finished-note", "Archive was extracted and removed.");
         actions.appendChild(done);
+      } else {
+        const deleteButton = createNode("button", "choice-button", "Delete File");
+        deleteButton.type = "button";
+        deleteButton.addEventListener("click", async () => {
+          const confirmed = window.confirm(`Delete "${job.archiveName}" from disk and remove it from the archive queue?`);
+          if (!confirmed) {
+            return;
+          }
+          await window.f95App.deleteArchiveFile(job.id);
+          await reloadState();
+        });
+        actions.appendChild(deleteButton);
       }
     }
 
@@ -1042,6 +1097,7 @@ function renderActiveDownloads() {
     const card = createNode("article", "download-activity-card");
     const header = createNode("div", "download-activity-header");
     const titleWrap = createNode("div", "download-activity-title-wrap");
+    const headerActions = createNode("div", "download-activity-header-actions");
     const title = createNode("strong", "download-activity-title", job.fileName || job.label || job.host || "Download");
     const subtitle = createNode(
       "span",
@@ -1061,7 +1117,20 @@ function renderActiveDownloads() {
       titleWrap.appendChild(subtitle);
     }
     header.appendChild(titleWrap);
-    header.appendChild(status);
+    headerActions.appendChild(status);
+    if (isCancelableDownloadJob(job)) {
+      const cancelButton = createCancelDownloadButton();
+      cancelButton.addEventListener("click", async () => {
+        try {
+          await window.f95App.cancelDownload(job.id);
+          await reloadState();
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+      headerActions.appendChild(cancelButton);
+    }
+    header.appendChild(headerActions);
     card.appendChild(header);
     card.appendChild(progress);
     card.appendChild(progressText);
@@ -1071,34 +1140,51 @@ function renderActiveDownloads() {
 
 function renderArchiveQueueBar() {
   const bar = $("#archive-queue-bar");
-  const toggle = $("#archive-queue-toggle");
   const summary = $("#archive-queue-summary");
   const count = $("#archive-queue-count");
-  if (!bar || !toggle || !summary || !count) {
+  if (!bar || !summary || !count) {
     return;
   }
 
   const openCount = getArchiveQueueOpenCount();
-  const totalCount = state.archiveJobs.length;
   const extractionActive = Boolean(state.currentExtraction);
   const activeDownloadCount = getActiveDownloadJobs().length;
-  const canExpand = totalCount > 0 || activeDownloadCount > 0 || extractionActive;
+  const hasVisibleContent = openCount > 0 || activeDownloadCount > 0 || extractionActive;
+  const hasDownloads = activeDownloadCount > 0;
+  const hasArchives = openCount > 0;
+  const hasExtraction = extractionActive;
+  const mode =
+    hasDownloads && hasArchives && hasExtraction
+      ? "all"
+      : hasDownloads && hasArchives
+        ? "downloads-archives"
+        : hasDownloads && hasExtraction
+          ? "downloads-extracting"
+          : hasArchives && hasExtraction
+            ? "archives-extracting"
+            : hasDownloads
+              ? "downloads-only"
+              : hasArchives
+                ? "archives-only"
+                : hasExtraction
+                  ? "extracting-only"
+                  : "hidden";
   const summaryText = activeDownloadCount > 0
     ? `${activeDownloadCount} download${activeDownloadCount === 1 ? "" : "s"} active.`
     : extractionActive
       ? "Extraction in progress."
       : openCount > 0
         ? `${openCount} archive${openCount === 1 ? "" : "s"} need attention.`
-        : totalCount > 0
-          ? "All detected archives are resolved."
-          : "";
+        : "";
 
-  bar.classList.toggle("is-collapsed", !state.archiveQueueExpanded);
-  bar.classList.toggle("is-pending", !state.archiveQueueReady);
-  toggle.setAttribute("aria-expanded", state.archiveQueueExpanded ? "true" : "false");
-  toggle.setAttribute("data-can-expand", canExpand ? "true" : "false");
+  bar.classList.toggle("is-pending", !state.archiveQueueReady || !hasVisibleContent);
+  bar.dataset.mode = mode;
   summary.textContent = summaryText;
   count.textContent = String(openCount);
+  document.documentElement.style.setProperty(
+    "--archive-bar-reserved-space",
+    hasVisibleContent ? `var(--archive-bar-height-${mode})` : "0px"
+  );
 }
 
 function renderExtractionStatus() {
@@ -1323,14 +1409,6 @@ async function initialize() {
       closeLightbox();
     }
   });
-  $("#archive-queue-toggle").addEventListener("click", () => {
-    if (state.archiveJobs.length === 0) {
-      return;
-    }
-    state.archiveQueueExpanded = !state.archiveQueueExpanded;
-    renderArchiveQueueBar();
-  });
-
   function closeCurrentOverlay() {
     if (state.openOverlay === "edit-folder") {
       state.editingFolderId = null;

@@ -13,10 +13,12 @@ function send(type, payload) {
 }
 
 function progressPayload({ currentFile, processedFiles, totalFiles, startedAt }) {
+  const normalizedProcessedFiles = Math.max(0, Number(processedFiles || 0));
+  const normalizedTotalFiles = Math.max(normalizedProcessedFiles, Number(totalFiles || 0));
   return {
     currentFile,
-    processedFiles,
-    totalFiles,
+    processedFiles: normalizedProcessedFiles,
+    totalFiles: normalizedTotalFiles,
     startedAt
   };
 }
@@ -175,10 +177,16 @@ async function main({ archivePath, targetPath, sevenZipPath }) {
 process.on("message", async (payload) => {
   try {
     await main(payload);
-    send("done", {});
-    process.exit(0);
+    if (process.send) {
+      process.send({ type: "done", payload: {} }, () => process.disconnect());
+    } else {
+      process.exit(0);
+    }
   } catch (error) {
-    send("error", { message: error.message });
-    process.exit(1);
+    if (process.send) {
+      process.send({ type: "error", payload: { message: error.message } }, () => process.exit(1));
+    } else {
+      process.exit(1);
+    }
   }
 });

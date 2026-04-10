@@ -11,9 +11,15 @@
   --shell-padding: 24px;
   --topbar-offset: 0px;
   --topbar-reserved-space: 98px;
-  --archive-bar-collapsed-height: 48px;
-  --archive-bar-expanded-height: 320px;
-  --archive-bar-reserved-space: 60px;
+  --archive-bar-height-hidden: 0px;
+  --archive-bar-height-downloads-only: 210px;
+  --archive-bar-height-archives-only: 250px;
+  --archive-bar-height-extracting-only: 150px;
+  --archive-bar-height-downloads-archives: 360px;
+  --archive-bar-height-downloads-extracting: 290px;
+  --archive-bar-height-archives-extracting: 350px;
+  --archive-bar-height-all: 470px;
+  --archive-bar-reserved-space: 0px;
 }
 
 * {
@@ -89,17 +95,18 @@ body {
   padding: 0;
   border-radius: 20px 20px 0 0;
   overflow: hidden;
-  max-height: var(--archive-bar-expanded-height);
+  height: 0;
   transition:
     transform 180ms ease,
     opacity 180ms ease,
     visibility 180ms ease,
-    max-height 180ms ease;
+    height 180ms ease;
 }
 
 .archive-queue-bar.is-pending {
   visibility: hidden;
   pointer-events: none;
+  opacity: 0;
 }
 
 .topbar.is-hidden-for-overlay {
@@ -116,13 +123,9 @@ body {
   pointer-events: none;
 }
 
-.archive-queue-bar.is-collapsed {
-  max-height: var(--archive-bar-collapsed-height);
-}
-
-.archive-queue-toggle {
+.archive-queue-header {
   width: 100%;
-  min-height: var(--archive-bar-collapsed-height);
+  min-height: 48px;
   padding: 8px 14px;
   border-radius: 0;
   background:
@@ -133,14 +136,6 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-}
-
-.archive-queue-toggle[data-can-expand="false"] {
-  cursor: default;
-}
-
-.archive-queue-toggle[data-can-expand="false"]:hover {
-  transform: none;
 }
 
 .archive-queue-title-wrap {
@@ -187,27 +182,40 @@ body {
   font-weight: 700;
 }
 
-.archive-queue-toggle-icon {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  fill: none;
-  transition: transform 140ms ease;
-}
-
-.archive-queue-bar:not(.is-collapsed) .archive-queue-toggle-icon {
-  transform: rotate(-90deg);
-}
-
 .archive-queue-body {
   display: grid;
   gap: 14px;
-  padding: 0 18px 18px;
-  overflow-y: auto;
+  padding: 14px 18px 18px;
+  overflow: hidden;
   border-top: 1px solid rgba(171, 204, 191, 0.08);
+}
+
+.archive-queue-bar[data-mode="downloads-only"] {
+  height: var(--archive-bar-height-downloads-only);
+}
+
+.archive-queue-bar[data-mode="archives-only"] {
+  height: var(--archive-bar-height-archives-only);
+}
+
+.archive-queue-bar[data-mode="extracting-only"] {
+  height: var(--archive-bar-height-extracting-only);
+}
+
+.archive-queue-bar[data-mode="downloads-archives"] {
+  height: var(--archive-bar-height-downloads-archives);
+}
+
+.archive-queue-bar[data-mode="downloads-extracting"] {
+  height: var(--archive-bar-height-downloads-extracting);
+}
+
+.archive-queue-bar[data-mode="archives-extracting"] {
+  height: var(--archive-bar-height-archives-extracting);
+}
+
+.archive-queue-bar[data-mode="all"] {
+  height: var(--archive-bar-height-all);
 }
 
 .active-downloads-section.hidden {
@@ -245,6 +253,8 @@ body {
 .active-downloads-list {
   display: grid;
   gap: 12px;
+  max-height: 116px;
+  overflow-y: auto;
 }
 
 .download-activity-card {
@@ -261,6 +271,14 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.download-activity-header-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .download-activity-title-wrap {
@@ -288,10 +306,6 @@ body {
 
 .download-progress {
   margin-top: 2px;
-}
-
-.archive-queue-bar.is-collapsed .archive-queue-body {
-  display: none;
 }
 
 .topbar-brand {
@@ -635,7 +649,7 @@ button:hover,
 }
 
 .jobs-list {
-  max-height: 220px;
+  max-height: 170px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -1404,6 +1418,37 @@ button:hover,
   justify-content: flex-end;
 }
 
+.download-cancel-button {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(221, 108, 100, 0.14);
+  color: #ffccc7;
+  box-shadow:
+    inset 0 0 0 1px rgba(221, 108, 100, 0.18),
+    0 10px 18px rgba(0, 0, 0, 0.16);
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.download-cancel-button:hover {
+  transform: translateY(-1px);
+  background: rgba(221, 108, 100, 0.2);
+}
+
+.download-cancel-button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
 .download-status {
   color: var(--muted);
   line-height: 1.35;
@@ -1449,6 +1494,7 @@ button:hover,
   border-radius: 16px;
   background: rgba(226, 176, 76, 0.12);
   border: 1px solid rgba(226, 176, 76, 0.18);
+  min-height: 82px;
 }
 
 .extraction-status.hidden {
