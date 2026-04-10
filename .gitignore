@@ -6,6 +6,7 @@ node_modules/
 *.sqlite-wal
 *.db
 *.log
+app-log.txt*
 logs/
 
 # Local environment and secrets
