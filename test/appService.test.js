@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 const { AppService } = require("../src/main/services/appService");
 
-async function createService() {
+async function createService(options = {}) {
   const userDataPath = await fs.mkdtemp(path.join(os.tmpdir(), "f95-app-service-"));
   const service = new AppService({
     userDataPath,
@@ -14,10 +14,45 @@ async function createService() {
         get: async () => []
       }
     },
-    onStateChanged: () => {}
+    onStateChanged: () => {},
+    onGameUpdateAvailable: options.onGameUpdateAvailable
   });
   await service.db.initialize();
   return { service, userDataPath };
+}
+
+async function createGameWithInstalledVersion(service, overrides = {}) {
+  const sourceUrl = overrides.sourceUrl || "https://f95zone.to/threads/update-game.4242/";
+  const title = overrides.title || "Update Game";
+  const currentVersion = overrides.currentVersion || "1.0";
+  const installedVersion = Object.prototype.hasOwnProperty.call(overrides, "installedVersion")
+    ? overrides.installedVersion
+    : "1.0";
+
+  const game = await service.db.upsertGameFromThread({
+    sourceUrl,
+    title,
+    threadTitle: overrides.threadTitle || title,
+    currentVersion,
+    developer: "Dev",
+    engine: "Ren'Py",
+    threadStatus: "Ongoing",
+    overview: "",
+    releaseDate: "",
+    changelog: "",
+    bannerImage: null,
+    screenshotImages: [],
+    tags: [],
+    warnings: [],
+    aliases: [],
+    rawOpHtml: overrides.rawOpHtml || "",
+    rawOpText: overrides.rawOpText || "",
+    parserDebug: {},
+    downloadGroups: []
+  });
+
+  await service.db.updateInstalledVersion(game.id, installedVersion, null);
+  return service.db.getGameById(game.id);
 }
 
 test("inferInstalledVersionFromFolder returns improved versions for common folder formats", async (t) => {
@@ -78,6 +113,105 @@ test("initialize triggers one background refresh for all games", async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.equal(refreshCount, 1);
+});
+
+test("emitUpdateNotificationIfNeeded does not notify when no status change happened", async (t) => {
+  const notifications = [];
+  const { service, userDataPath } = await createService({
+    onGameUpdateAvailable: async (payload) => {
+      notifications.push(payload);
+    }
+  });
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const previousGame = await createGameWithInstalledVersion(service, {
+    sourceUrl: "https://f95zone.to/threads/no-change.5001/",
+    title: "No Change",
+    currentVersion: "1.0",
+    installedVersion: "1.0"
+  });
+  const nextGame = service.db.getGameById(previousGame.id);
+
+  await service.emitUpdateNotificationIfNeeded(previousGame, nextGame);
+
+  assert.equal(notifications.length, 0);
+});
+
+test("emitUpdateNotificationIfNeeded notifies when a game becomes update-available", async (t) => {
+  const notifications = [];
+  const { service, userDataPath } = await createService({
+    onGameUpdateAvailable: async (payload) => {
+      notifications.push(payload);
+    }
+  });
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const previousGame = await createGameWithInstalledVersion(service, {
+    sourceUrl: "https://f95zone.to/threads/update-once.5002/",
+    title: "Update Once",
+    currentVersion: "1.0",
+    installedVersion: "1.0"
+  });
+
+  await service.db.upsertGameFromThread({
+    sourceUrl: previousGame.threadUrl,
+    title: previousGame.title,
+    threadTitle: previousGame.threadTitle,
+    currentVersion: "1.1",
+    developer: previousGame.developer,
+    engine: previousGame.engine,
+    threadStatus: previousGame.threadStatus,
+    overview: previousGame.overview,
+    releaseDate: previousGame.releaseDate,
+    changelog: previousGame.changelog,
+    bannerImage: previousGame.bannerImage,
+    screenshotImages: previousGame.screenshotImages,
+    tags: previousGame.tags,
+    warnings: [],
+    aliases: previousGame.aliases,
+    rawOpHtml: "<article>updated</article>",
+    rawOpText: "updated",
+    parserDebug: {},
+    downloadGroups: previousGame.downloadGroups
+  });
+  const nextGame = service.db.getGameById(previousGame.id);
+
+  await service.emitUpdateNotificationIfNeeded(previousGame, nextGame);
+
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].gameId, previousGame.id);
+  assert.equal(notifications[0].title, "Update Once");
+  assert.equal(notifications[0].status, "update-available");
+  assert.equal(notifications[0].currentVersion, "1.1");
+  assert.equal(notifications[0].installedVersion, "1.0");
+});
+
+test("emitUpdateNotificationIfNeeded does not notify twice for an already known update", async (t) => {
+  const notifications = [];
+  const { service, userDataPath } = await createService({
+    onGameUpdateAvailable: async (payload) => {
+      notifications.push(payload);
+    }
+  });
+  t.after(async () => {
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+
+  const previousGame = await createGameWithInstalledVersion(service, {
+    sourceUrl: "https://f95zone.to/threads/already-update.5003/",
+    title: "Already Update",
+    currentVersion: "1.1",
+    installedVersion: "1.0"
+  });
+  const nextGame = service.db.getGameById(previousGame.id);
+
+  await service.emitUpdateNotificationIfNeeded(previousGame, nextGame);
+
+  assert.equal(notifications.length, 0);
 });
 
 test("hasThreadChanges returns false when the parsed thread content is unchanged", async (t) => {

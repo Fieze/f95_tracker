@@ -1,5 +1,5 @@
 const path = require("path");
-const { app, BrowserWindow, dialog, ipcMain, shell, session } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, session, Tray, Menu, Notification } = require("electron");
 const { AppService } = require("./services/appService");
 const { Logger } = require("./services/logger");
 
@@ -7,12 +7,101 @@ let mainWindow;
 let loginWindow;
 let appService;
 let logger;
+let tray;
+let isQuitting = false;
 const AUTH_PARTITION = "persist:f95-auth";
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.ico")
   : path.join(__dirname, "..", "..", "resources", "icon.ico");
 const appRootPath = app.isPackaged ? path.dirname(process.execPath) : path.join(__dirname, "..", "..");
 const logFilePath = path.join(appRootPath, "app-log.txt");
+const APP_USER_MODEL_ID = "com.f95tracker.app";
+
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+}
+
+function restoreMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.setSkipTaskbar(false);
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+async function hideMainWindowToTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  await logger?.info("Hiding main window to tray.");
+  mainWindow.setSkipTaskbar(true);
+  mainWindow.hide();
+}
+
+function createTray() {
+  if (tray) {
+    return tray;
+  }
+
+  tray = new Tray(appIconPath);
+  tray.setToolTip("F95 Tracker");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "Open",
+        click: () => {
+          restoreMainWindow();
+        }
+      },
+      { type: "separator" },
+      {
+        label: "Beenden",
+        click: async () => {
+          isQuitting = true;
+          await logger?.info("Quit requested from tray.");
+          app.quit();
+        }
+      }
+    ])
+  );
+  tray.on("click", () => {
+    restoreMainWindow();
+  });
+  return tray;
+}
+
+function buildUpdateNotificationBody(payload) {
+  const title = payload?.title || "Ein beobachtetes Spiel";
+  const currentVersion = payload?.currentVersion ? `v${payload.currentVersion}` : "eine neue Version";
+  const installedVersion = payload?.installedVersion ? `Installiert: v${payload.installedVersion}` : "Noch nicht installiert";
+  return `${title}: ${currentVersion} verfuegbar. ${installedVersion}`;
+}
+
+function showGameUpdateNotification(payload) {
+  if (!Notification.isSupported()) {
+    logger?.warn("System notifications are not supported on this platform.");
+    return;
+  }
+
+  const notification = new Notification({
+    title: "Update gefunden",
+    body: buildUpdateNotificationBody(payload),
+    icon: appIconPath,
+    silent: false
+  });
+
+  notification.on("click", () => {
+    restoreMainWindow();
+  });
+  notification.show();
+}
 
 async function createWindow() {
   await logger?.info("Creating main window.");
@@ -36,6 +125,19 @@ async function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) {
+      return;
+    }
+
+    event.preventDefault();
+    void hideMainWindowToTray();
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
   });
 }
 
@@ -199,6 +301,10 @@ app.whenReady().then(async () => {
     userDataPath: app.getPath("userData"),
     authSession,
     logger: logger.child("service"),
+    onGameUpdateAvailable: async (payload) => {
+      await logger?.info("Showing Windows update notification.", payload);
+      showGameUpdateNotification(payload);
+    },
     onStateChanged: () => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("state:changed");
@@ -208,6 +314,7 @@ app.whenReady().then(async () => {
 
   await appService.initialize();
   bindIpc();
+  createTray();
   await createWindow();
   await logger.info("Application ready.");
 
@@ -215,18 +322,26 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await logger?.info("App activated with no open windows, recreating main window.");
       await createWindow();
+      return;
     }
+
+    restoreMainWindow();
   });
 });
 
 app.on("window-all-closed", () => {
   logger?.info("All windows closed.");
-  if (process.platform !== "darwin") {
+  if (process.platform === "darwin") {
+    return;
+  }
+
+  if (isQuitting) {
     app.quit();
   }
 });
 
 app.on("before-quit", async () => {
+  isQuitting = true;
   await logger?.info("Application shutting down.");
   if (appService) {
     await appService.dispose();

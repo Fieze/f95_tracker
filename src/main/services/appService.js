@@ -28,8 +28,9 @@ const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 
 class AppService {
-  constructor({ userDataPath, authSession, onStateChanged, logger }) {
+  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger }) {
     this.onStateChanged = onStateChanged;
+    this.onGameUpdateAvailable = onGameUpdateAvailable;
     this.authSession = authSession;
     this.userDataPath = userDataPath;
     this.logger = logger || noopLogger;
@@ -609,9 +610,11 @@ class AppService {
       const updated = await this.db.upsertGameFromThread(enriched);
       await this.ensureGameRootForGame(updated);
       await this.syncGameFolders(updated.id, { game: this.db.getGameById(updated.id) });
+      const nextGame = this.db.getGameById(updated.id);
+      await this.emitUpdateNotificationIfNeeded(game, nextGame);
       this.emitChange();
       await this.logger.info("Game refreshed.", { gameId: updated.id, title: updated.title });
-      return this.db.getGameById(updated.id);
+      return nextGame;
     } catch (error) {
       await this.db.markSyncFailure(gameId, error.message);
       this.emitChange();
@@ -622,6 +625,34 @@ class AppService {
       });
       throw error;
     }
+  }
+
+  async emitUpdateNotificationIfNeeded(previousGame, nextGame) {
+    if (!previousGame || !nextGame) {
+      return;
+    }
+
+    if (previousGame.status === "update-available" || nextGame.status !== "update-available") {
+      return;
+    }
+
+    await this.logger.info("Game update became available.", {
+      gameId: nextGame.id,
+      title: nextGame.title,
+      previousInstalledVersion: previousGame.installedVersion || null,
+      nextInstalledVersion: nextGame.installedVersion || null,
+      currentVersion: nextGame.currentVersion || null
+    });
+
+    await this.onGameUpdateAvailable?.({
+      gameId: nextGame.id,
+      title: nextGame.title,
+      threadTitle: nextGame.threadTitle,
+      currentVersion: nextGame.currentVersion || null,
+      installedVersion: nextGame.installedVersion || null,
+      previousStatus: previousGame.status || null,
+      status: nextGame.status
+    });
   }
 
   async refreshAllGames() {
