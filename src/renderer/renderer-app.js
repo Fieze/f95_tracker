@@ -15,7 +15,9 @@ const state = {
   currentExtraction: null,
   selectedGameId: null,
   editingFolderId: null,
-  openOverlay: null
+  openOverlay: null,
+  archiveQueueExpanded: false,
+  archiveQueueReady: false
 };
 
 const GAME_TILE_MIN_COLUMNS = 3;
@@ -26,6 +28,7 @@ const GAME_TILE_GAP = 18;
 let gamesGridResizeObserver = null;
 let reloadStatePromise = null;
 let reloadStateQueued = false;
+let archiveQueueInitialized = false;
 const launchExecutableCache = new Map();
 
 function $(selector) {
@@ -266,6 +269,13 @@ function renderOverlays() {
   $("#game-details-panel")?.classList.toggle("hidden", !gameDetailsOpen);
   $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
+  renderChromeVisibility();
+}
+
+function renderChromeVisibility() {
+  const hideChrome = state.openOverlay === "game-details" || state.openOverlay === "edit-folder";
+  $("#archive-queue-bar")?.classList.toggle("is-hidden-for-overlay", hideChrome);
+  $(".topbar")?.classList.toggle("is-hidden-for-overlay", hideChrome);
 }
 
 function renderStats() {
@@ -276,6 +286,28 @@ function renderStats() {
   $("#stat-jobs").textContent = String(
     state.archiveJobs.filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status)).length
   );
+}
+
+function getArchiveQueueOpenCount(jobs = state.archiveJobs) {
+  return (jobs || []).filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status)).length;
+}
+
+function updateArchiveQueueAutoExpand(previousJobs, nextJobs) {
+  const previousCount = getArchiveQueueOpenCount(previousJobs || []);
+  const nextCount = getArchiveQueueOpenCount(nextJobs || []);
+  const previousTotal = (previousJobs || []).length;
+  const nextTotal = (nextJobs || []).length;
+
+  if (!archiveQueueInitialized) {
+    state.archiveQueueExpanded = nextTotal > 0;
+    state.archiveQueueReady = true;
+    archiveQueueInitialized = true;
+    return;
+  }
+
+  if (nextCount > previousCount || nextTotal > previousTotal) {
+    state.archiveQueueExpanded = true;
+  }
 }
 
 function getGamesGridMetrics(containerWidth) {
@@ -319,7 +351,7 @@ function fitGameTileTitles(container = $("#games-list")) {
     titleNode.style.fontSize = "16px";
     const computed = window.getComputedStyle(titleNode);
     const lineHeight = parseFloat(computed.lineHeight) || 18.4;
-    const maxHeight = lineHeight * 2 + 1;
+    const maxHeight = lineHeight * 2 + 4;
 
     let fontSize = 16;
     while (titleNode.scrollHeight > maxHeight && fontSize > 12) {
@@ -741,6 +773,7 @@ function renderGames() {
 
 function renderJobs() {
   renderExtractionStatus();
+  renderArchiveQueueBar();
   const container = $("#jobs-list");
   container.innerHTML = "";
 
@@ -828,6 +861,35 @@ function renderJobs() {
   });
 }
 
+function renderArchiveQueueBar() {
+  const bar = $("#archive-queue-bar");
+  const toggle = $("#archive-queue-toggle");
+  const summary = $("#archive-queue-summary");
+  const count = $("#archive-queue-count");
+  if (!bar || !toggle || !summary || !count) {
+    return;
+  }
+
+  const openCount = getArchiveQueueOpenCount();
+  const totalCount = state.archiveJobs.length;
+  const extractionActive = Boolean(state.currentExtraction);
+  const canExpand = totalCount > 0;
+  const summaryText = extractionActive
+    ? "Extraction in progress."
+    : openCount > 0
+      ? `${openCount} archive${openCount === 1 ? "" : "s"} need attention.`
+      : totalCount > 0
+        ? "All detected archives are resolved."
+        : "";
+
+  bar.classList.toggle("is-collapsed", !state.archiveQueueExpanded);
+  bar.classList.toggle("is-pending", !state.archiveQueueReady);
+  toggle.setAttribute("aria-expanded", state.archiveQueueExpanded ? "true" : "false");
+  toggle.setAttribute("data-can-expand", canExpand ? "true" : "false");
+  summary.textContent = summaryText;
+  count.textContent = String(openCount);
+}
+
 function renderExtractionStatus() {
   const node = $("#extraction-status");
   const extraction = state.currentExtraction;
@@ -874,7 +936,9 @@ async function reloadState() {
   reloadStatePromise = (async () => {
     do {
       reloadStateQueued = false;
+      const previousJobs = state.archiveJobs || [];
       const nextState = await window.f95App.bootstrap();
+      updateArchiveQueueAutoExpand(previousJobs, nextState.archiveJobs || []);
       Object.assign(state, nextState);
       pruneLaunchExecutableCache(state.games);
       if (!state.games.some((game) => game.id === state.selectedGameId)) {
@@ -1041,6 +1105,13 @@ async function initialize() {
     if (event.target.id === "image-lightbox") {
       closeLightbox();
     }
+  });
+  $("#archive-queue-toggle").addEventListener("click", () => {
+    if (state.archiveJobs.length === 0) {
+      return;
+    }
+    state.archiveQueueExpanded = !state.archiveQueueExpanded;
+    renderArchiveQueueBar();
   });
 
   function closeCurrentOverlay() {

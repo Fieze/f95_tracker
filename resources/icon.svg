@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#c0392b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7b241c;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e1e1e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#111111;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softglow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="roundRect">
+      <rect width="512" height="512" rx="96" ry="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bgGrad)"/>
+
+  <!-- Subtle dark grid texture overlay -->
+  <rect width="512" height="512" rx="96" ry="96" fill="none" stroke="#2a2a2a" stroke-width="0"/>
+
+  <!-- Red top accent bar -->
+  <rect x="0" y="0" width="512" height="8" rx="0" fill="url(#redGrad)" clip-path="url(#roundRect)"/>
+
+  <!-- ── Bracket LEFT ── -->
+  <rect x="72"  y="120" width="14" height="272" rx="4" fill="url(#redGrad)"/>
+  <rect x="72"  y="120" width="52" height="14"  rx="4" fill="url(#redGrad)"/>
+  <rect x="72"  y="378" width="52" height="14"  rx="4" fill="url(#redGrad)"/>
+
+  <!-- ── Bracket RIGHT ── -->
+  <rect x="426" y="120" width="14" height="272" rx="4" fill="url(#redGrad)"/>
+  <rect x="388" y="120" width="52" height="14"  rx="4" fill="url(#redGrad)"/>
+  <rect x="388" y="378" width="52" height="14"  rx="4" fill="url(#redGrad)"/>
+
+  <!-- ── Thread rows with status dots ── -->
+
+  <!-- Row 1 -->
+  <circle cx="156" cy="175" r="12" fill="url(#redGrad)" filter="url(#softglow)"/>
+  <!-- checkmark in dot -->
+  <polyline points="150,175 154,180 163,169" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="180" y="167" width="148" height="16" rx="5" fill="#e0e0e0" opacity="0.9"/>
+
+  <!-- Row 2 -->
+  <circle cx="156" cy="230" r="12" fill="#2e2e2e" stroke="#444" stroke-width="2"/>
+  <rect x="180" y="222" width="112" height="16" rx="5" fill="#e0e0e0" opacity="0.6"/>
+
+  <!-- Row 3 -->
+  <circle cx="156" cy="285" r="12" fill="url(#redGrad)" filter="url(#softglow)"/>
+  <polyline points="150,285 154,290 163,279" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="180" y="277" width="168" height="16" rx="5" fill="#e0e0e0" opacity="0.9"/>
+
+  <!-- Row 4 -->
+  <circle cx="156" cy="340" r="12" fill="#2e2e2e" stroke="#444" stroke-width="2"/>
+  <rect x="180" y="332" width="130" height="16" rx="5" fill="#e0e0e0" opacity="0.6"/>
+
+  <!-- ── "F95" text bottom center ── -->
+  <text x="256" y="430"
+        font-family="'Arial Black', 'Impact', sans-serif"
+        font-weight="900"
+        font-size="48"
+        text-anchor="middle"
+        letter-spacing="2"
+        fill="#f0f0f0">F<tspan fill="url(#redGrad)">95</tspan></text>
+
+  <!-- Bottom red accent bar -->
+  <rect x="0" y="504" width="512" height="8" rx="0" fill="url(#redGrad)" clip-path="url(#roundRect)"/>
+</svg>
