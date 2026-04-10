@@ -23,6 +23,7 @@ const {
 
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const EXTRACTION_PROGRESS_EMIT_INTERVAL_MS = 250;
+const EXTRACTION_PROGRESS_LOG_INTERVAL_MS = 5000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 
@@ -42,6 +43,7 @@ class AppService {
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
     this.lastExtractionProgressEmitAt = 0;
+    this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
     this.fetcher = new ThreadFetcher(authSession);
     this.folderWatcher = new FolderWatcher({
@@ -771,6 +773,7 @@ class AppService {
       : buildVersionedInstallDirectory(installDirectory, game.title, versionForFolder);
     const archiveStats = await fs.stat(job.archivePath);
     const startedAt = new Date().toISOString();
+    this.lastExtractionProgressLogAt = 0;
     this.currentExtraction = {
       jobId: job.id,
       archiveName: job.archiveName,
@@ -791,10 +794,22 @@ class AppService {
 
     try {
       await fs.mkdir(targetDirectory, { recursive: true });
+      await this.logger.info("Archive extraction prepared.", {
+        jobId: job.id,
+        gameId,
+        archivePath: job.archivePath,
+        archiveSizeBytes: archiveStats.size,
+        archiveHasSingleRootFolder,
+        installDirectory,
+        targetDirectory,
+        detectedVersion: detectedVersion || null
+      });
       this.activeExtractionHandle = extractArchiveWithProgress(job.archivePath, targetDirectory, (progress) => {
         this.updateExtractionProgress(progress);
       });
       await this.activeExtractionHandle.completion;
+      const finishedAt = Date.now();
+      const startedAtMs = new Date(startedAt).getTime();
       await this.db.updateArchiveJob(job.id, {
         status: "processed",
         gameId,
@@ -807,7 +822,11 @@ class AppService {
       await this.logger.info("Archive extraction completed.", {
         jobId: job.id,
         gameId,
-        targetDirectory
+        archivePath: job.archivePath,
+        targetDirectory,
+        elapsedMs: Number.isFinite(startedAtMs) ? Math.max(0, finishedAt - startedAtMs) : null,
+        processedFiles: this.currentExtraction?.processedFiles || 0,
+        totalFiles: this.currentExtraction?.totalFiles || 0
       });
     } catch (error) {
       await this.db.updateArchiveJob(job.id, {
@@ -859,10 +878,26 @@ class AppService {
     const shouldEmit =
       processedFiles >= totalFiles ||
       now - this.lastExtractionProgressEmitAt >= EXTRACTION_PROGRESS_EMIT_INTERVAL_MS;
+    const shouldLogProgress =
+      processedFiles > 0 &&
+      (processedFiles >= totalFiles ||
+        now - this.lastExtractionProgressLogAt >= EXTRACTION_PROGRESS_LOG_INTERVAL_MS);
 
     if (shouldEmit) {
       this.lastExtractionProgressEmitAt = now;
       this.emitChange();
+    }
+
+    if (shouldLogProgress) {
+      this.lastExtractionProgressLogAt = now;
+      this.logger.info("Archive extraction progress.", {
+        jobId: this.currentExtraction.jobId,
+        archiveName: this.currentExtraction.archiveName,
+        currentFile: this.currentExtraction.currentFile || "",
+        processedFiles,
+        totalFiles,
+        estimatedRemainingMs
+      }).catch(() => {});
     }
   }
 
