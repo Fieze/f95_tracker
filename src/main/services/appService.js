@@ -41,12 +41,21 @@ const DOWNLOADABLE_FILE_EXTENSIONS = new Set([
 ]);
 
 class AppService {
-  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger }) {
+  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {} }) {
     this.onStateChanged = onStateChanged;
     this.onGameUpdateAvailable = onGameUpdateAvailable;
     this.authSession = authSession;
     this.userDataPath = userDataPath;
     this.logger = logger || noopLogger;
+    this.loggers = {
+      main: this.logger,
+      download: loggers.download || this.logger,
+      extraction: loggers.extraction || this.logger,
+      parsing: loggers.parsing || this.logger
+    };
+    this.downloadLogger = this.loggers.download;
+    this.extractionLogger = this.loggers.extraction;
+    this.parsingLogger = this.loggers.parsing;
     this.assetCachePath = path.join(userDataPath, "thread-assets");
     this.backupPath = path.join(userDataPath, "backups");
     this.currentExtraction = null;
@@ -594,7 +603,10 @@ class AppService {
       throw new Error("Please log in to F95Zone first.");
     }
     const thread = await this.fetcher.fetchThread(normalizedUrl);
-    const parsed = parseThread(thread.html, thread.url);
+    const parsed = await this.parseThreadWithLogging(thread.html, thread.url, {
+      action: "add_thread",
+      threadUrl: normalizedUrl
+    });
     const enriched = await this.hydrateThreadAssets(parsed);
     const game = await this.db.upsertGameFromThread(enriched);
     await this.ensureGameRootForGame(game);
@@ -617,7 +629,11 @@ class AppService {
         throw new Error("Please log in to F95Zone first.");
       }
       const thread = await this.fetcher.fetchThread(game.threadUrl);
-      const parsed = parseThread(thread.html, thread.url);
+      const parsed = await this.parseThreadWithLogging(thread.html, thread.url, {
+        action: "refresh_game",
+        gameId: game.id,
+        title: game.title
+      });
       if (!this.hasThreadChanges(refreshMetadata, parsed)) {
         await this.db.markSyncSuccess(game.id, parsed.warnings || []);
         await this.logger.info("Game refresh detected no thread changes.", {
@@ -643,6 +659,35 @@ class AppService {
         gameId: Number(gameId),
         title: game.title,
         message: error.message
+      });
+      throw error;
+    }
+  }
+
+  async parseThreadWithLogging(html, sourceUrl, details = {}) {
+    const startedAt = Date.now();
+    await this.parsingLogger.info("Parsing thread.", {
+      sourceUrl,
+      ...details
+    });
+
+    try {
+      const parsed = parseThread(html, sourceUrl);
+      await this.parsingLogger.info("Thread parsed.", {
+        sourceUrl: parsed.sourceUrl || sourceUrl,
+        title: parsed.title || "",
+        warningCount: parsed.warnings?.length || 0,
+        downloadGroupCount: parsed.downloadGroups?.length || 0,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        ...details
+      });
+      return parsed;
+    } catch (error) {
+      await this.parsingLogger.error("Thread parsing failed.", {
+        sourceUrl,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        message: error.message,
+        ...details
       });
       throw error;
     }
@@ -745,7 +790,7 @@ class AppService {
         await this.db.deleteArchiveJob(job.id);
         this.emitChange();
       } catch (error) {
-        await this.logger.warn("Failed to prune processed archive job after delay.", {
+        await this.extractionLogger.warn("Failed to prune processed archive job after delay.", {
           jobId: Number(jobId),
           message: error.message
         });
@@ -766,7 +811,7 @@ class AppService {
   }
 
   async processArchive({ archivePath, archiveName, archiveHash, gameId = null, detectedVersion = null, autoExtract = false }) {
-    await this.logger.info("Processing detected archive.", {
+    await this.extractionLogger.info("Processing detected archive.", {
       archiveName,
       archivePath,
       gameId: gameId ? Number(gameId) : null,
@@ -820,7 +865,7 @@ class AppService {
     }
 
     this.emitChange();
-    await this.logger.info("Archive job updated.", {
+    await this.extractionLogger.info("Archive job updated.", {
       archiveName,
       status: job.status,
       jobId: job.id
@@ -835,7 +880,7 @@ class AppService {
   }
 
   async resolveArchiveMatch({ jobId, action, gameId }) {
-    await this.logger.info("Resolving archive job.", {
+    await this.extractionLogger.info("Resolving archive job.", {
       jobId: Number(jobId),
       action,
       gameId: gameId ? Number(gameId) : null
@@ -860,7 +905,7 @@ class AppService {
   }
 
   async extractJob(jobId, gameId, detectedVersion) {
-    await this.logger.info("Starting archive extraction.", {
+    await this.extractionLogger.info("Starting archive extraction.", {
       jobId: Number(jobId),
       gameId: Number(gameId),
       detectedVersion: detectedVersion || null
@@ -910,7 +955,7 @@ class AppService {
       this.emitChange();
 
       await fs.mkdir(targetDirectory, { recursive: true });
-      await this.logger.info("Archive extraction prepared.", {
+      await this.extractionLogger.info("Archive extraction prepared.", {
         jobId: job.id,
         gameId,
         archivePath: job.archivePath,
@@ -936,7 +981,7 @@ class AppService {
       this.scheduleProcessedArchiveRemoval(job.id);
       await fs.unlink(job.archivePath).catch(() => {});
       await this.syncGameFolders(gameId, { game, rootOverride: installDirectory });
-      await this.logger.info("Archive extraction completed.", {
+      await this.extractionLogger.info("Archive extraction completed.", {
         jobId: job.id,
         gameId,
         archivePath: job.archivePath,
@@ -953,7 +998,7 @@ class AppService {
         detectedVersion,
         errorText: error.message
       });
-      await this.logger.error("Archive extraction failed.", {
+      await this.extractionLogger.error("Archive extraction failed.", {
         jobId: job.id,
         gameId,
         message: error.message
@@ -1008,7 +1053,7 @@ class AppService {
 
     if (shouldLogProgress) {
       this.lastExtractionProgressLogAt = now;
-      this.logger.info("Archive extraction progress.", {
+      this.extractionLogger.info("Archive extraction progress.", {
         jobId: this.currentExtraction.jobId,
         archiveName: this.currentExtraction.archiveName,
         currentFile: this.currentExtraction.currentFile || "",
@@ -1082,7 +1127,7 @@ class AppService {
       existingAsset.localPath &&
       (await this.assetExists(existingAsset.localPath))
     ) {
-      await this.logger.info("Reused cached asset.", {
+      await this.downloadLogger.info("Reused cached asset.", {
         prefix,
         assetUrl,
         filePath: existingAsset.localPath
@@ -1108,7 +1153,7 @@ class AppService {
     const fileName = `${prefix}-${crypto.createHash("sha1").update(fetched.url).digest("hex")}${extension}`;
     const filePath = path.join(this.assetCachePath, fileName);
     await fs.writeFile(filePath, fetched.buffer);
-    await this.logger.info("Downloaded asset.", {
+    await this.downloadLogger.info("Downloaded asset.", {
       prefix,
       assetUrl: fetched.url,
       filePath
@@ -1343,7 +1388,7 @@ class AppService {
         errorMessage: ""
       });
 
-      await this.logger.info("Resolved file download completed.", {
+      await this.downloadLogger.info("Resolved file download completed.", {
         jobId: job.id,
         sourceUrl: job.sourceUrl,
         resolvedUrl,

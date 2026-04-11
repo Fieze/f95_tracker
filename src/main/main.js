@@ -9,6 +9,9 @@ let downloadWindow;
 let downloadWindowState = null;
 let appService;
 let logger;
+let downloadLogger;
+let extractionLogger;
+let parsingLogger;
 let tray;
 let isQuitting = false;
 const AUTH_PARTITION = "persist:f95-auth";
@@ -17,7 +20,11 @@ const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.ico")
   : path.join(__dirname, "..", "..", "resources", "icon.ico");
 const appRootPath = app.isPackaged ? path.dirname(process.execPath) : path.join(__dirname, "..", "..");
-const logFilePath = path.join(appRootPath, "app-log.txt");
+const logDirectoryPath = path.join(appRootPath, "logs");
+const logFilePath = path.join(logDirectoryPath, "main.log");
+const downloadLogFilePath = path.join(logDirectoryPath, "download.log");
+const extractionLogFilePath = path.join(logDirectoryPath, "extraction.log");
+const parsingLogFilePath = path.join(logDirectoryPath, "parsing.log");
 const APP_USER_MODEL_ID = "com.f95tracker.app";
 
 if (process.platform === "win32") {
@@ -211,7 +218,7 @@ async function syncAuthCookiesToDownloadSession(targetUrl) {
       try {
         await downloadSession.cookies.set(payload);
       } catch (error) {
-        logger?.warn("Failed to mirror auth cookie into download session.", {
+        downloadLogger?.warn("Failed to mirror auth cookie into download session.", {
           targetUrl,
           cookieName: cookie.name,
           message: error.message
@@ -261,7 +268,7 @@ function maybeTakeOverDownloadUrl(jobId, candidateUrl, extra = {}) {
     referrer: extra.referrer || candidateUrl,
     fileName: extra.fileName || ""
   }).catch((error) => {
-    logger?.error("Failed to take over resolved download url.", {
+    downloadLogger?.error("Failed to take over resolved download url.", {
       jobId,
       candidateUrl,
       message: error.message
@@ -293,7 +300,7 @@ function attachDownloadSessionListeners() {
       fileName: item.getFilename(),
       referrer: webContents.getURL()
     }).catch((error) => {
-      logger?.error("Failed to take over browser-triggered download.", {
+      downloadLogger?.error("Failed to take over browser-triggered download.", {
         jobId: state.jobId,
         url: item.getURL(),
         message: error.message
@@ -403,7 +410,7 @@ async function createDownloadWindow(payload) {
   const job = appService.createDownloadJob(payload);
   await syncAuthCookiesToDownloadSession(targetUrl);
 
-  await logger?.info("Creating download window.", {
+  await downloadLogger?.info("Creating download window.", {
     jobId: job.id,
     sourceUrl: targetUrl,
     host: job.host
@@ -441,7 +448,7 @@ async function createDownloadWindow(payload) {
     }
 
     if (!isSafeBrowserUrl(url)) {
-      logger?.warn("Blocked non-http download window target.", {
+      downloadLogger?.warn("Blocked non-http download window target.", {
         jobId: job.id,
         url
       });
@@ -451,7 +458,7 @@ async function createDownloadWindow(payload) {
     void syncAuthCookiesToDownloadSession(url)
       .then(() => downloadWindow.loadURL(url))
       .catch((error) => {
-        logger?.warn("Download window navigation failed.", {
+        downloadLogger?.warn("Download window navigation failed.", {
           jobId: job.id,
           url,
           message: error.message
@@ -477,7 +484,7 @@ async function createDownloadWindow(payload) {
   downloadWindow.webContents.on("will-navigate", (event, candidateUrl) => {
     if (!isSafeBrowserUrl(candidateUrl)) {
       event.preventDefault();
-      logger?.warn("Blocked non-http navigation inside download window.", {
+      downloadLogger?.warn("Blocked non-http navigation inside download window.", {
         jobId: job.id,
         url: candidateUrl
       });
@@ -517,15 +524,17 @@ async function createDownloadWindow(payload) {
 }
 
 function bindIpc() {
+  const resolveChannelLogger = (channel) => (String(channel).startsWith("downloads:") ? downloadLogger : logger);
   const handle = (channel, listener) => {
     ipcMain.handle(channel, async (event, payload) => {
-      await logger?.info(`IPC ${channel} started.`);
+      const channelLogger = resolveChannelLogger(channel);
+      await channelLogger?.info(`IPC ${channel} started.`);
       try {
         const result = await listener(event, payload);
-        await logger?.info(`IPC ${channel} completed.`);
+        await channelLogger?.info(`IPC ${channel} completed.`);
         return result;
       } catch (error) {
-        await logger?.error(`IPC ${channel} failed.`, error);
+        await channelLogger?.error(`IPC ${channel} failed.`, error);
         throw error;
       }
     });
@@ -635,7 +644,13 @@ function bindIpc() {
 
 app.whenReady().then(async () => {
   logger = new Logger({ filePath: logFilePath, scope: "main" });
+  downloadLogger = new Logger({ filePath: downloadLogFilePath, scope: "download" });
+  extractionLogger = new Logger({ filePath: extractionLogFilePath, scope: "extraction" });
+  parsingLogger = new Logger({ filePath: parsingLogFilePath, scope: "parsing" });
   await logger.initialize();
+  await downloadLogger.initialize();
+  await extractionLogger.initialize();
+  await parsingLogger.initialize();
   await logger.info("Application starting.", {
     isPackaged: app.isPackaged,
     logFilePath
@@ -647,6 +662,11 @@ app.whenReady().then(async () => {
     userDataPath: app.getPath("userData"),
     authSession,
     logger: logger.child("service"),
+    loggers: {
+      download: downloadLogger,
+      extraction: extractionLogger,
+      parsing: parsingLogger
+    },
     onGameUpdateAvailable: async (payload) => {
       await logger?.info("Showing Windows update notification.", payload);
       showGameUpdateNotification(payload);

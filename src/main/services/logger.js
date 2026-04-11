@@ -2,7 +2,8 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const DEFAULT_MAX_FILE_SIZE_BYTES = 1024 * 1024;
-const DEFAULT_MAX_ROTATED_FILES = 5;
+const DEFAULT_MAX_ROTATED_FILES = 3;
+const TIMESTAMP_PREFIX_PATTERN = /^\[(?<timestamp>[^\]]+)\]/;
 
 class Logger {
   constructor({ filePath, scope = "app", state, maxFileSizeBytes, maxRotatedFiles } = {}) {
@@ -70,23 +71,73 @@ class Logger {
       return;
     }
 
-    for (let index = this.maxRotatedFiles; index >= 1; index -= 1) {
-      const sourcePath = this.buildRotatedPath(index);
-      const targetPath = this.buildRotatedPath(index + 1);
-
-      if (index === this.maxRotatedFiles) {
-        await fs.rm(sourcePath, { force: true }).catch(() => {});
-        continue;
-      }
-
-      await fs.rename(sourcePath, targetPath).catch(() => {});
-    }
-
-    await fs.rename(this.filePath, this.buildRotatedPath(1)).catch(() => {});
+    const rotatedPath = await this.buildRotatedPathFromLatestEntry(stats);
+    await fs.rename(this.filePath, rotatedPath).catch(() => {});
+    await this.pruneRotatedFiles();
   }
 
-  buildRotatedPath(index) {
-    return `${this.filePath}.${index}`;
+  async buildRotatedPathFromLatestEntry(stats) {
+    const timestamp = await this.resolveLatestEntryTimestamp(stats);
+    const parsedPath = path.parse(this.filePath);
+    const baseName = `${parsedPath.name}-${timestamp}`;
+    let candidatePath = path.join(parsedPath.dir, `${baseName}${parsedPath.ext}`);
+    let collisionIndex = 1;
+
+    while (await fs.stat(candidatePath).then(() => true).catch(() => false)) {
+      candidatePath = path.join(parsedPath.dir, `${baseName}-${collisionIndex}${parsedPath.ext}`);
+      collisionIndex += 1;
+    }
+
+    return candidatePath;
+  }
+
+  async resolveLatestEntryTimestamp(stats) {
+    const content = await fs.readFile(this.filePath, "utf8").catch(() => "");
+    const lines = content.split(/\r?\n/).filter(Boolean);
+
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const match = lines[index].match(TIMESTAMP_PREFIX_PATTERN);
+      const candidate = match?.groups?.timestamp ? new Date(match.groups.timestamp) : null;
+      if (candidate && Number.isFinite(candidate.getTime())) {
+        return Logger.formatTimestampForFileName(candidate);
+      }
+    }
+
+    return Logger.formatTimestampForFileName(stats?.mtime || new Date());
+  }
+
+  async pruneRotatedFiles() {
+    const rotatedFiles = await this.listRotatedFiles();
+    const staleFiles = rotatedFiles
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .slice(this.maxRotatedFiles);
+
+    await Promise.all(staleFiles.map((entry) => fs.rm(entry.fullPath, { force: true }).catch(() => {})));
+  }
+
+  async listRotatedFiles() {
+    if (!this.filePath) {
+      return [];
+    }
+
+    const parsedPath = path.parse(this.filePath);
+    const entries = await fs.readdir(parsedPath.dir, { withFileTypes: true }).catch(() => []);
+    const prefix = `${parsedPath.name}-`;
+    const suffix = parsedPath.ext;
+    const matchingEntries = entries.filter(
+      (entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(suffix)
+    );
+
+    return Promise.all(
+      matchingEntries.map(async (entry) => {
+        const fullPath = path.join(parsedPath.dir, entry.name);
+        const fileStats = await fs.stat(fullPath).catch(() => null);
+        return {
+          fullPath,
+          mtimeMs: fileStats?.mtimeMs || 0
+        };
+      })
+    );
   }
 
   formatLine(level, message, details) {
@@ -112,6 +163,13 @@ class Logger {
     } catch {
       return ` ${JSON.stringify({ value: String(details) })}`;
     }
+  }
+
+  static formatTimestampForFileName(value) {
+    return new Date(value)
+      .toISOString()
+      .replace(/:/g, "-")
+      .replace(/\./g, "-");
   }
 }
 
