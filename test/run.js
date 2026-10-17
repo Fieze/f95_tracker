@@ -17,3 +17,4 @@ require("./safety.test");
 require("./integration.test");
 require("./robustness.test");
 require("./libraryFilters.test");
+require("./scraping.test");

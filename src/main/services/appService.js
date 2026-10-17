@@ -67,6 +67,7 @@ class AppService {
     this.lastExtractionProgressEmitAt = 0;
     this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
+    this.sessionSeenLoggedIn = null;
     this.fetcher = new ThreadFetcher(authSession);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
     this.extractArchiveWithProgress = extractArchiveWithProgress;
@@ -155,11 +156,32 @@ class AppService {
     });
   }
 
-  // Scrapes the thread page through the logged-in F95Zone session.
+  // Scrapes the thread page with the app's F95Zone session. Guests can read metadata; only download links
+  // and some tags need a login.
   async loadThread(url, details = {}) {
-    if (!(await this.getAuthState()).loggedIn) throw new Error("Please log in to F95Zone first.");
     const thread = await this.fetcher.fetchThread(url);
+    this.noteLoggedInFromHtml(thread.html);
     return this.parseThreadWithLogging(thread.html, thread.url, details);
+  }
+
+  // Every F95Zone page states whether the session is logged in, which is more reliable than the cookie alone.
+  noteLoggedInFromHtml(html) {
+    const match = String(html || "").match(/<html[^>]*\sdata-logged-in="(true|false)"/i);
+    if (!match) return null;
+    const loggedIn = match[1] === "true";
+    if (this.sessionSeenLoggedIn !== loggedIn) {
+      this.sessionSeenLoggedIn = loggedIn;
+      this.emitChange();
+    }
+    return loggedIn;
+  }
+
+  // A guest page must not wipe download links or hidden tags that an earlier logged-in sync stored.
+  preserveMembersOnlyData(parsed, refreshMetadata, game) {
+    if (!parsed.parserDebug?.guestView) return;
+    if (!parsed.downloadGroups?.length) parsed.downloadGroups = refreshMetadata?.downloadGroups || game.downloadGroups || [];
+    const known = new Set(parsed.tags);
+    parsed.tags = [...parsed.tags, ...(game.tags || []).filter((tag) => !known.has(tag))];
   }
 
   async importDataFromFile(filePath) {
@@ -255,6 +277,7 @@ class AppService {
         gameId: game.id,
         title: game.title
       });
+      this.preserveMembersOnlyData(parsed, refreshMetadata, game);
       if (!this.hasThreadChanges(refreshMetadata, parsed)) {
         await this.db.markSyncSuccess(game.id, parsed.warnings || []);
         await this.logger.info("Game refresh detected no thread changes.", {
@@ -485,9 +508,13 @@ class AppService {
   async getAuthState() {
     const cookies = await this.authSession.cookies.get({ domain: "f95zone.to" });
     const cookieMap = new Map(cookies.map((cookie) => [cookie.name, cookie.value]));
-    const loggedIn = cookieMap.has("xf_user");
+    const hasUserCookie = cookieMap.has("xf_user");
+    // A cookie that F95Zone no longer honours shows up as data-logged-in="false" on the next page we load.
+    const sessionExpired = hasUserCookie && this.sessionSeenLoggedIn === false;
+    const loggedIn = hasUserCookie && !sessionExpired;
     return {
       loggedIn,
+      sessionExpired,
       hasSessionCookie: cookieMap.has("xf_session"),
       hasUserCookie: cookieMap.has("xf_user")
     };
@@ -497,6 +524,7 @@ class AppService {
     const auth = await this.getAuthState();
     const response = await this.fetcher.fetchUrl("https://f95zone.to/account/");
     const html = response.html || "";
+    const pageLoggedIn = this.noteLoggedInFromHtml(html);
     const redirectedToLogin = /\/login\//i.test(response.url);
     const hasLogoutLink = /\/logout\//i.test(html);
     const hasAccountMarker = /\/account\/|visitor-menu|menuTrigger/i.test(html);
@@ -511,7 +539,8 @@ class AppService {
       hasLogoutLink,
       hasAccountMarker,
       loginFormVisible,
-      ok: auth.loggedIn && !redirectedToLogin && !loginFormVisible
+      pageLoggedIn,
+      ok: pageLoggedIn !== null ? pageLoggedIn : auth.loggedIn && !redirectedToLogin && !loginFormVisible
     };
   }
 

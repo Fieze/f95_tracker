@@ -43,6 +43,9 @@ if (hasInstanceLock) app.whenReady().then(async () => {
 
   const authSession = session.fromPartition(AUTH_PARTITION);
   hardenSession(authSession);
+  // Present a plain Chrome user agent (no app/Electron tokens) so the login window and the scraper share one
+  // browser identity; Cloudflare ties its clearance cookie to the user agent.
+  authSession.setUserAgent(authSession.getUserAgent().replace(/(\(KHTML, like Gecko\)).*?(\sChrome\/)/, "$1$2").replace(/\sElectron\/\S+/, ""));
   hardenSession(session.fromPartition(DOWNLOAD_PARTITION));
   hardenSession(session.defaultSession);
   attachDownloadSessionListeners();

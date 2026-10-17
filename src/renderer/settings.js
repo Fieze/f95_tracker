@@ -17,8 +17,10 @@ function renderAuth() {
 
   if (state.auth.loggedIn) {
     statusNode.textContent = "Logged in. The app is now using its own F95Zone session.";
+  } else if (state.auth.sessionExpired) {
+    statusNode.textContent = "Your F95Zone session has expired. Log in again for download links and all tags.";
   } else {
-    statusNode.textContent = "Not logged in. Sign in to F95Zone to add and refresh threads.";
+    statusNode.textContent = "Not logged in. Threads can be added and refreshed as a guest; log in for download links and all tags.";
   }
 
   if (resultNode) {

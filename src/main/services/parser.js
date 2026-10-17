@@ -635,7 +635,9 @@ function parseThread(html, sourceUrl) {
   const rawTitle = extractDisplayTitleText($, titleNode) || fullTitleText;
   const threadStatus = extractThreadStatus($, titleNode);
   const titlePrefixes = extractTitlePrefixes($, titleNode);
-  const loggedIn = $("html").attr("data-logged-in") === "true";
+  const loggedInAttribute = $("html").attr("data-logged-in");
+  const loggedIn = loggedInAttribute === "true";
+  const guestView = loggedInAttribute === "false";
 
   let article = $(".message-threadStarterPost .message-body").first();
   if (!article.length) {
@@ -688,7 +690,7 @@ function parseThread(html, sourceUrl) {
 
   if (detectLoginPage(sourceUrl, html)) {
     warnings.push("The fetched page looks like a login page instead of the thread.");
-  } else if (!article.length || (!loggedIn && detectAuthWall(html) && opText.trim().length < 200)) {
+  } else if (!article.length || (guestView && detectAuthWall(html) && opText.trim().length < 200)) {
     warnings.push("The fetched page looks like a restricted view without full thread content.");
   }
 
@@ -696,9 +698,9 @@ function parseThread(html, sourceUrl) {
   const downloadGroups = downloadExtraction.groups;
   if (downloadGroups.length === 0) {
     warnings.push(
-      loggedIn || html.indexOf("data-logged-in") === -1
-        ? "No download links were detected in the opening post."
-        : "Download links are only visible when logged in to F95Zone."
+      guestView
+        ? "Download links are only visible when logged in to F95Zone."
+        : "No download links were detected in the opening post."
     );
   }
 
@@ -734,6 +736,7 @@ function parseThread(html, sourceUrl) {
       articleNode: article.length ? article.get(0).tagName : null,
       articleClass: article.length ? article.attr("class") || "" : "",
       loggedIn,
+      guestView,
       titlePrefixes,
       loginPageDetected: detectLoginPage(sourceUrl, html),
       authWallDetected: detectAuthWall(html),
