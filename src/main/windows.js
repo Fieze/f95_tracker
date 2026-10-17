@@ -24,8 +24,8 @@ async function createWindow() {
   ctx.mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 1320,
-    minHeight: 720,
+    minWidth: 900,
+    minHeight: 600,
     icon: appIconPath,
     backgroundColor: "#16211e",
     webPreferences: {

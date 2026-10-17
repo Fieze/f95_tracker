@@ -12,6 +12,8 @@ const outDir = path.join(cache, "ui-audit");
 app.setPath("userData", path.join(cache, "electron-audit-profile"));
 
 const SIZES = [
+  { name: "narrow-900x640", width: 900, height: 640 },
+  { name: "compact-1100x700", width: 1100, height: 700 },
   { name: "min-1320x720", width: 1320, height: 720 },
   { name: "std-1440x900", width: 1440, height: 900 },
   { name: "wide-1920x1080", width: 1920, height: 1080 }

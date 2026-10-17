@@ -2137,3 +2137,53 @@ textarea:focus-visible {
 .overlay-panel:focus {
   outline: none;
 }
+
+/* ---- Narrow windows (the window can now shrink to 900 px) ---- */
+:root {
+  /* Content starts below the real topbar height instead of a fixed 98px. */
+  --topbar-reserved-space: calc(var(--topbar-height) - 20px);
+}
+
+#refresh-all {
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .topbar {
+    gap: 12px;
+    padding: 10px 14px;
+  }
+
+  .topbar-stat {
+    padding: 8px 12px;
+  }
+
+  .topbar-stat span {
+    font-size: 0.78rem;
+    line-height: 1.2;
+  }
+
+  .topbar-stat strong {
+    margin-top: 2px;
+    font-size: 1.2rem;
+  }
+
+  .topbar-brand img {
+    max-width: 150px;
+  }
+
+  .library-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .library-toolbar input[type="search"] {
+    max-width: none;
+    flex: 1 1 200px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .primary-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
