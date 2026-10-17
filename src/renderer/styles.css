@@ -1627,3 +1627,33 @@ button:hover,
   font-size: 0.85rem;
   white-space: nowrap;
 }
+
+.history-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.history-entry {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.history-date {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.history-changelog {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  color: var(--muted);
+}

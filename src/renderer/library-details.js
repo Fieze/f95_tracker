@@ -189,6 +189,19 @@ function buildGameDetailsCard(selectedGame) {
   const changelog = detailFragment.querySelector(".changelog");
   changelog.textContent = selectedGame.changelog || "";
   detailFragment.querySelector(".changelog-section").classList.toggle("hidden", !selectedGame.changelog);
+  const historyList = detailFragment.querySelector(".history-list");
+  (selectedGame.history || []).forEach((entry) => {
+    const item = createNode("li", "history-entry");
+    const heading = createNode(
+      "strong",
+      "",
+      entry.previousVersion ? `${entry.previousVersion} → ${entry.version}` : `${entry.version} (first seen)`
+    );
+    item.append(heading, createNode("span", "history-date", formatDate(entry.detectedAt)));
+    if (entry.changelog) item.appendChild(createNode("p", "history-changelog", entry.changelog));
+    historyList.appendChild(item);
+  });
+  detailFragment.querySelector(".history-section").classList.toggle("hidden", !(selectedGame.history || []).length);
   threadLink.href = selectedGame.threadUrl;
   threadLink.textContent = "Open Thread";
 

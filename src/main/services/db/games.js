@@ -6,7 +6,7 @@ module.exports = {
     parsedThread = { ...parsedThread };
     const threadId = parsedThread.threadId || extractThreadId(parsedThread.sourceUrl);
     const existing = this.first(
-      "SELECT id, aliases, has_seasons, installed_version, install_path FROM games WHERE thread_id = ? OR thread_url = ? ORDER BY id ASC LIMIT 1",
+      "SELECT id, aliases, has_seasons, installed_version, install_path, current_version FROM games WHERE thread_id = ? OR thread_url = ? ORDER BY id ASC LIMIT 1",
       [threadId, parsedThread.sourceUrl]
     );
     if (existing && parsedThread.dataSource === "api") {
@@ -111,9 +111,35 @@ module.exports = {
     });
     linkStmt.free();
 
+    this.recordVersionHistory(game.id, parsedThread.currentVersion, parsedThread.changelog);
     this.insertSyncRun(game.id, true, parsedThread.warnings, null);
     await this.persist();
     return this.getGameById(game.id);
+  },
+
+  // Appends a history entry whenever the thread's version differs from the latest recorded one.
+  recordVersionHistory(gameId, version, changelog) {
+    const current = String(version || "").trim();
+    if (!current) return;
+    const latest = this.first("SELECT version FROM game_history WHERE game_id = ? ORDER BY id DESC LIMIT 1", [gameId]);
+    if (latest?.version === current) return;
+    this.db.run(
+      "INSERT INTO game_history (game_id, version, previous_version, changelog, detected_at) VALUES (?, ?, ?, ?, ?)",
+      [gameId, current, latest?.version ?? null, String(changelog || "").slice(0, 8000) || null, new Date().toISOString()]
+    );
+  },
+
+  listGameHistory(gameId, limit = 20) {
+    return this.query(
+      "SELECT id, version, previous_version, changelog, detected_at FROM game_history WHERE game_id = ? ORDER BY id DESC LIMIT ?",
+      [gameId, limit]
+    ).map((row) => ({
+      id: row.id,
+      version: row.version,
+      previousVersion: row.previous_version,
+      changelog: row.changelog || "",
+      detectedAt: row.detected_at
+    }));
   },
 
   async markSyncFailure(gameId, errorMessage) {
@@ -237,6 +263,7 @@ module.exports = {
   async deleteGame(gameId) {
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [gameId]);
     this.db.run("DELETE FROM sync_runs WHERE game_id = ?", [gameId]);
+    this.db.run("DELETE FROM game_history WHERE game_id = ?", [gameId]);
     this.db.run("DELETE FROM archive_jobs WHERE game_id = ?", [gameId]);
     this.db.run("DELETE FROM game_folders WHERE game_id = ?", [gameId]);
     this.db.run("DELETE FROM games WHERE id = ?", [gameId]);
@@ -317,6 +344,7 @@ module.exports = {
       parserWarnings: safeJsonParse(row.parser_warnings, []),
       downloadGroups: groups,
       folders: hydratedFolders,
+      history: this.listGameHistory(row.id),
       lastSyncAt: row.last_sync_at,
       lastSyncStatus: row.last_sync_status
     };

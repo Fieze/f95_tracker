@@ -14,6 +14,7 @@ module.exports = {
         download_links: this.query("SELECT * FROM download_links ORDER BY id"),
         archive_jobs: this.query("SELECT * FROM archive_jobs ORDER BY id"),
         sync_runs: this.query("SELECT * FROM sync_runs ORDER BY id"),
+        game_history: this.query("SELECT * FROM game_history ORDER BY id"),
         game_folders: this.query("SELECT * FROM game_folders ORDER BY id")
       }
     };
@@ -30,8 +31,9 @@ module.exports = {
     candidate.db = new this.sql.Database();
     try {
       candidate.migrate();
-      for (const table of ["settings", "games", "download_links", "archive_jobs", "sync_runs", "game_folders"]) {
-        const rows = snapshot.tables[table];
+      for (const table of ["settings", "games", "download_links", "archive_jobs", "sync_runs", "game_folders", "game_history"]) {
+        // game_history was added later; exports from older versions simply do not contain it.
+        const rows = table === "game_history" ? snapshot.tables[table] ?? [] : snapshot.tables[table];
         if (!Array.isArray(rows)) throw new Error(`Invalid backup table: ${table}`);
         const columns = new Set(candidate.query(`PRAGMA table_info(${table})`).map((row) => row.name));
         for (const row of rows) {
@@ -72,7 +74,7 @@ module.exports = {
 
   loadSnapshot(snapshot) {
 
-    const tableOrder = ["settings", "games", "download_links", "archive_jobs", "sync_runs", "game_folders"];
+    const tableOrder = ["settings", "games", "download_links", "archive_jobs", "sync_runs", "game_folders", "game_history"];
     this.db.run("PRAGMA foreign_keys = OFF;");
     try {
       this.db.run("BEGIN TRANSACTION;");
@@ -80,6 +82,7 @@ module.exports = {
       this.db.run("DELETE FROM download_links");
       this.db.run("DELETE FROM archive_jobs");
       this.db.run("DELETE FROM sync_runs");
+      this.db.run("DELETE FROM game_history");
       this.db.run("DELETE FROM game_folders");
       this.db.run("DELETE FROM games");
       this.db.run("DELETE FROM settings");
@@ -243,6 +246,7 @@ module.exports = {
     for (const duplicateId of duplicateIds) {
       this.mergeFoldersIntoGame(keeper.id, duplicateId);
       this.db.run("UPDATE sync_runs SET game_id = ? WHERE game_id = ?", [keeper.id, duplicateId]);
+      this.db.run("UPDATE game_history SET game_id = ? WHERE game_id = ?", [keeper.id, duplicateId]);
       this.db.run("UPDATE archive_jobs SET game_id = ? WHERE game_id = ?", [keeper.id, duplicateId]);
       this.db.run("DELETE FROM download_links WHERE game_id = ?", [duplicateId]);
       this.db.run("DELETE FROM games WHERE id = ?", [duplicateId]);

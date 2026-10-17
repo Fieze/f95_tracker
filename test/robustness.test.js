@@ -49,3 +49,46 @@ test("concurrent persist calls are coalesced and the file holds the latest state
   await reopened.initialize();
   assert.equal(reopened.first("SELECT value FROM settings WHERE key = 'probe'").value, "latest");
 });
+
+const baseThread = (overrides) => ({
+  sourceUrl: "https://f95zone.to/threads/history-game.555/",
+  threadId: "555",
+  title: "History Game",
+  threadTitle: "History Game [v1.0]",
+  currentVersion: "1.0",
+  warnings: [],
+  developer: "Dev",
+  engine: "Ren'Py",
+  threadStatus: "Ongoing",
+  overview: "",
+  releaseDate: "2026-01-01",
+  changelog: "",
+  bannerImage: null,
+  screenshotImages: [],
+  rawOpHtml: "",
+  rawOpText: "",
+  parserDebug: {},
+  tags: [],
+  downloadGroups: [],
+  ...overrides
+});
+
+test("game history records version changes once and survives export/import", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "f95-history-"));
+  const db = new DatabaseService(dir);
+  await db.initialize();
+  await db.upsertGameFromThread(baseThread({ changelog: "first" }));
+  await db.upsertGameFromThread(baseThread({ changelog: "first" }));
+  const updated = await db.upsertGameFromThread(baseThread({ currentVersion: "1.1", changelog: "added things" }));
+  assert.deepEqual(updated.history.map((entry) => [entry.previousVersion, entry.version]), [["1.0", "1.1"], [null, "1.0"]]);
+  assert.equal(updated.history[0].changelog, "added things");
+
+  const snapshot = db.exportSnapshot();
+  assert.equal(snapshot.tables.game_history.length, 2);
+  await db.importSnapshot(snapshot);
+  assert.equal(db.getGames()[0].history.length, 2);
+
+  delete snapshot.tables.game_history;
+  await db.importSnapshot(snapshot);
+  assert.equal(db.getGames()[0].history.length, 0);
+});

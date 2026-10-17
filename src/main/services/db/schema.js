@@ -75,6 +75,16 @@ module.exports = {
         FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS game_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_id INTEGER NOT NULL,
+        version TEXT NOT NULL,
+        previous_version TEXT,
+        changelog TEXT,
+        detected_at TEXT NOT NULL,
+        FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS game_folders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_id INTEGER NOT NULL,
