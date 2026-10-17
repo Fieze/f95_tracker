@@ -85,6 +85,20 @@ module.exports = {
     }
 
     const game = this.first("SELECT * FROM games WHERE thread_id = ?", [threadId]);
+    this.db.run(
+      `UPDATE games SET thread_updated = ?, os = ?, language = ?, censored = ?, developer_links = ?, rating = ?, rating_count = ?
+       WHERE id = ?`,
+      [
+        parsedThread.threadUpdated ?? null,
+        parsedThread.os ?? null,
+        parsedThread.language ?? null,
+        parsedThread.censored ?? null,
+        JSON.stringify(parsedThread.developerLinks || []),
+        parsedThread.rating ?? null,
+        parsedThread.ratingCount ?? null,
+        game.id
+      ]
+    );
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [game.id]);
 
     const linkStmt = this.db.prepare(`
@@ -307,6 +321,13 @@ module.exports = {
       threadStatus: row.thread_status,
       overview: row.overview,
       releaseDate: row.release_date,
+      threadUpdated: row.thread_updated,
+      os: row.os,
+      language: row.language,
+      censored: row.censored,
+      developerLinks: safeJsonParse(row.developer_links, []),
+      rating: row.rating,
+      ratingCount: row.rating_count,
       changelog: row.changelog,
       bannerImage: row.banner_image_path
         ? {

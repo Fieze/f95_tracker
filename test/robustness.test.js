@@ -120,3 +120,20 @@ test("legacy API key file is removed on startup", async () => {
   await assert.rejects(() => fs.access(keyFile));
   await service.dispose();
 });
+
+test("extra thread details are stored and hydrated", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "f95-details-"));
+  const db = new DatabaseService(dir);
+  await db.initialize();
+  const game = await db.upsertGameFromThread(baseThread({
+    os: "Windows", language: "English", censored: "No", threadUpdated: "2026-10-15",
+    rating: 4.5, ratingCount: 12, developerLinks: [{ label: "Patreon", url: "https://www.patreon.com/x" }]
+  }));
+  assert.equal(game.os, "Windows");
+  assert.equal(game.rating, 4.5);
+  assert.equal(game.ratingCount, 12);
+  assert.deepEqual(game.developerLinks, [{ label: "Patreon", url: "https://www.patreon.com/x" }]);
+  const snapshot = db.exportSnapshot();
+  await db.importSnapshot(snapshot);
+  assert.equal(db.getGames()[0].language, "English");
+});

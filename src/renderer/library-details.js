@@ -189,6 +189,32 @@ function buildGameDetailsCard(selectedGame) {
   const changelog = detailFragment.querySelector(".changelog");
   changelog.textContent = selectedGame.changelog || "";
   detailFragment.querySelector(".changelog-section").classList.toggle("hidden", !selectedGame.changelog);
+  const setOptionalField = (itemSelector, valueSelector, text) => {
+    const item = detailFragment.querySelector(itemSelector);
+    detailFragment.querySelector(valueSelector).textContent = text || "";
+    item.classList.toggle("hidden", !text);
+  };
+  setOptionalField(
+    ".rating-item", ".rating-value",
+    selectedGame.rating == null
+      ? ""
+      : `${selectedGame.rating.toFixed(1)} / 5${selectedGame.ratingCount ? ` (${selectedGame.ratingCount.toLocaleString("en-US")} votes)` : ""}`
+  );
+  setOptionalField(".os-item", ".os-value", selectedGame.os);
+  setOptionalField(".language-item", ".language-value", selectedGame.language);
+  setOptionalField(".censored-item", ".censored-value", selectedGame.censored);
+  const developerLinks = detailFragment.querySelector(".developer-links");
+  (selectedGame.developerLinks || []).forEach((link) => {
+    const anchor = createNode("a", "developer-link", link.label || link.url);
+    anchor.href = link.url;
+    anchor.rel = "noopener noreferrer";
+    anchor.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.f95App.openLink(link.url);
+    });
+    developerLinks.appendChild(anchor);
+  });
+  developerLinks.classList.toggle("hidden", !(selectedGame.developerLinks || []).length);
   const historyList = detailFragment.querySelector(".history-list");
   (selectedGame.history || []).forEach((entry) => {
     const item = createNode("li", "history-entry");

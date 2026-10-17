@@ -106,6 +106,13 @@ module.exports = {
     this.ensureColumn("games", "data_source", "TEXT DEFAULT 'scraper'");
     this.ensureColumn("games", "api_last_promoted", "INTEGER");
     this.ensureColumn("games", "api_detail_checked_at", "TEXT");
+    this.ensureColumn("games", "thread_updated", "TEXT");
+    this.ensureColumn("games", "os", "TEXT");
+    this.ensureColumn("games", "language", "TEXT");
+    this.ensureColumn("games", "censored", "TEXT");
+    this.ensureColumn("games", "developer_links", "TEXT DEFAULT '[]'");
+    this.ensureColumn("games", "rating", "REAL");
+    this.ensureColumn("games", "rating_count", "INTEGER");
     this.ensureColumn("games", "thread_id", "TEXT");
     this.ensureColumn("games", "thread_title", "TEXT");
     this.ensureColumn("games", "release_date", "TEXT");

@@ -519,3 +519,34 @@ test("parseThread falls back to the thread cover from og:image but ignores the s
   const favicon = parseThread(page("https://f95zone.to/assets/favicon-32x32.png"), "https://f95zone.to/threads/g.1/");
   assert.equal(favicon.bannerImageUrl, null);
 });
+
+test("parseThread reads rating, OS, language, censoring, thread update date and developer links", () => {
+  const parsed = parseThread(fixtureHtml("renpy-logged-in"), "https://f95zone.to/threads/example-game.1/");
+  assert.equal(parsed.rating, 3.7);
+  assert.equal(parsed.ratingCount, 1847);
+  assert.equal(parsed.os, "Windows, Linux, Mac, Android");
+  assert.equal(parsed.language, "English");
+  assert.equal(parsed.censored, "No");
+  assert.equal(parsed.threadUpdated, "2026-10-15");
+  assert.deepEqual(parsed.developerLinks, [{ label: "Patreon", url: "https://www.patreon.com/example" }]);
+});
+
+test("parseThread leaves the new fields empty when the thread does not provide them", () => {
+  const parsed = parseThread(fixtureHtml("rpgm-guest"), "https://f95zone.to/threads/another-game.2/");
+  assert.equal(parsed.rating, null);
+  assert.equal(parsed.ratingCount, null);
+  assert.equal(parsed.language, null);
+  assert.equal(parsed.censored, null);
+  assert.equal(parsed.os, "Windows");
+  assert.deepEqual(parsed.developerLinks, []);
+});
+
+test("parseThread falls back to the star widget and rejects out-of-range ratings", () => {
+  const widget = (rating) => `<html data-logged-in="true"><body><h1 class="p-title-value">Game [v1.0] [Dev]</h1>
+    <select name="rating" data-initial-rating="${rating}"></select><div class="br-current-rating">70 Votes</div>
+    <article class="message-threadStarterPost"><div class="bbWrapper"><b>Overview:</b><br>Text.</div></article></body></html>`;
+  const ok = parseThread(widget("4.2"), "https://f95zone.to/threads/g.1/");
+  assert.equal(ok.rating, 4.2);
+  assert.equal(ok.ratingCount, 70);
+  assert.equal(parseThread(widget("9"), "https://f95zone.to/threads/g.1/").rating, null);
+});

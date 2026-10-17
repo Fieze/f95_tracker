@@ -1657,3 +1657,23 @@ button:hover,
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+.developer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.developer-link {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.developer-link:hover {
+  border-color: var(--accent);
+}

@@ -207,6 +207,52 @@ function extractChangelog($, article) {
   return changelog;
 }
 
+function singleLineField(lines, label) {
+  const pattern = new RegExp(`^${label}\\s*:`, "i");
+  const line = lines.find((entry) => pattern.test(entry.text));
+  return line ? normalizeWhitespace(line.text.replace(pattern, "")) || null : null;
+}
+
+// Links in the "Developer:" line that point away from the forum (Patreon, itch.io, ...), without the member profile.
+function extractDeveloperLinks(lines) {
+  const line = lines.find((entry) => /^developer\s*:/i.test(entry.text));
+  const seen = new Set();
+  const links = [];
+  for (const link of line?.links || []) {
+    if (/^https?:\/\/(?:www\.)?f95zone\.to\//i.test(link.url) || seen.has(link.url)) continue;
+    seen.add(link.url);
+    links.push({ label: link.label, url: link.url });
+  }
+  return links;
+}
+
+function toRating(value, count) {
+  const rating = Number(value);
+  const votes = Number(String(count ?? "").replace(/,/g, ""));
+  if (!Number.isFinite(rating) || rating < 0 || rating > 5) return { rating: null, ratingCount: null };
+  return { rating, ratingCount: Number.isInteger(votes) && votes >= 0 ? votes : null };
+}
+
+// Prefers the schema.org Book data, then the star widget in the page header.
+function extractRating($) {
+  for (const node of $("script[type='application/ld+json']").toArray()) {
+    try {
+      const data = JSON.parse($(node).contents().text());
+      const aggregate = data?.["@type"] === "Book" ? data.aggregateRating : null;
+      if (aggregate) {
+        const result = toRating(aggregate.ratingValue, aggregate.ratingCount);
+        if (result.rating !== null) return result;
+      }
+    } catch { /* malformed structured data: try the widget */ }
+  }
+  const widget = $("select[name='rating'][data-initial-rating]").first();
+  if (widget.length) {
+    const votes = textOf($(".br-current-rating").first()).match(/([\d,]+)\s*vote/i);
+    return toRating(widget.attr("data-initial-rating"), votes?.[1]);
+  }
+  return { rating: null, ratingCount: null };
+}
+
 function extractVersionFromTitle(title) {
   const normalized = normalizeWhitespace(title);
   for (const pattern of VERSION_PATTERNS) {
@@ -670,6 +716,7 @@ function parseThread(html, sourceUrl) {
   const engine = extractEngineFromPrefixes(titlePrefixes) || taggedEngine || titleParts.engine || null;
   const overview = extractFieldText(logicalLines, "overview");
   const releaseDate = extractFieldText(logicalLines, "releaseDate");
+  const { rating, ratingCount } = extractRating($);
   const changelog = article.length ? extractChangelog($, article) : null;
 
   const tags = [];
@@ -724,6 +771,13 @@ function parseThread(html, sourceUrl) {
     threadStatus,
     overview,
     releaseDate,
+    threadUpdated: singleLineField(logicalLines, "thread updated"),
+    os: singleLineField(logicalLines, "os"),
+    language: singleLineField(logicalLines, "language"),
+    censored: singleLineField(logicalLines, "censored"),
+    developerLinks: extractDeveloperLinks(logicalLines),
+    rating,
+    ratingCount,
     changelog,
     tags,
     bannerImageUrl: imageAssets.bannerImageUrl,
