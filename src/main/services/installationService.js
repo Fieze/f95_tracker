@@ -1,6 +1,6 @@
 const fs = require("fs/promises");
 const path = require("path");
-const { assertNoLinks, assertManagedInstallPath, isWithin } = require("./safeFiles");
+const { assertNoLinks, assertSafeTree, assertManagedInstallPath, isWithin } = require("./safeFiles");
 const { extractVersionFromFilename } = require("./matcher");
 const { buildGameRootCandidates, buildInstallDirectory, isExpectedGameInstallPath, rankLaunchExecutables, sanitizePathSegment, sanitizeVersion } = require("./utils");
 const pathKey = (value) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
@@ -402,6 +402,94 @@ class InstallationService {
     });
     this.app.emitChange();
     return this.app.db.getGameById(Number(gameId));
+  }
+
+  // Checks a folder the user wants to add as an existing installation. Returns the resolved path and name;
+  // throws a readable error for anything that must not be registered or moved.
+  async validateExistingFolder(folderPath, mode = "keep") {
+    const raw = String(folderPath || "").trim();
+    if (!raw || !path.isAbsolute(raw)) throw new Error("Choose a folder first.");
+    const resolved = path.resolve(raw);
+    const stats = await fs.stat(resolved).catch(() => null);
+    if (!stats?.isDirectory()) throw new Error("The selected folder does not exist.");
+    await assertNoLinks(resolved);
+    if (path.parse(resolved).root === resolved) throw new Error("A drive root cannot be added as a game folder.");
+
+    const settings = this.app.db.getSettings();
+    const contains = (outer, inner) => pathKey(outer) === pathKey(inner) || isWithin(outer, inner);
+    for (const [label, other] of [
+      ["install root", settings.installRoot],
+      ["watch folder", settings.watchFolder],
+      ["application data folder", this.app.userDataPath]
+    ]) {
+      if (other && contains(resolved, other)) throw new Error(`This folder contains the ${label}; pick the game's own folder instead.`);
+    }
+    if (settings.watchFolder && contains(settings.watchFolder, resolved)) {
+      throw new Error("This folder is inside the watch folder, which is used for downloads and archives.");
+    }
+    for (const game of this.app.db.getGames()) {
+      for (const folder of this.app.db.listGameFolders(game.id)) {
+        if (contains(folder.folderPath, resolved) || contains(resolved, folder.folderPath)) {
+          throw new Error(`This folder is already part of "${game.title}".`);
+        }
+      }
+    }
+
+    if (mode === "move") {
+      if (!settings.installRoot) throw new Error("Set an install root in Settings before moving a folder into it.");
+      if (isWithin(settings.installRoot, resolved)) throw new Error("This folder is already inside the install root; add it without moving.");
+      // Symbolic links or junctions inside the tree would be copied or broken by a move.
+      await assertSafeTree(resolved).catch(() => {
+        throw new Error("The folder contains symbolic links or junctions and cannot be moved safely.");
+      });
+    }
+    return { folderPath: resolved, folderName: path.basename(resolved) };
+  }
+
+  // Registers an existing game folder for a game, optionally moving it into <install root>/<game title>/.
+  async addExistingFolder({ folderPath, gameId, mode = "keep" }) {
+    const game = this.app.db.getGameById(Number(gameId));
+    if (!game) throw new Error("Game not found.");
+    const source = await this.app.validateExistingFolder(folderPath, mode);
+    let finalPath = source.folderPath;
+    let rootOverride;
+
+    if (mode === "move") {
+      this.app.assertGameIdle(game.id);
+      const installRoot = this.app.db.getSettings().installRoot;
+      const gameRoot = await this.app.ensureGameRootForGame(game);
+      const destination = path.join(gameRoot, source.folderName);
+      if (!isWithin(installRoot, destination)) throw new Error("Move is only allowed inside the configured install root.");
+      await assertNoLinks(destination);
+      if (await this.app.assetExists(destination)) {
+        throw new Error(`"${source.folderName}" already exists in the game's install folder.`);
+      }
+      await this.app.logger.info("Moving existing game folder into the install root.", { gameId: game.id, source: source.folderPath, destination });
+      try {
+        await this.app.movePath(source.folderPath, destination);
+      } catch (error) {
+        // A cross-drive move copies first; remove the partial copy so nothing half-finished is left behind.
+        if (await this.app.assetExists(source.folderPath)) await fs.rm(destination, { recursive: true, force: true }).catch(() => {});
+        const reason = ["EBUSY", "EPERM", "EACCES"].includes(error.code)
+          ? "Files are in use or protected. Close the game and any open windows for that folder, then try again."
+          : error.message;
+        throw new Error(`Could not move the folder: ${reason}`);
+      }
+      finalPath = destination;
+      rootOverride = gameRoot;
+    }
+
+    const version = extractVersionFromFilename(source.folderName, {
+      currentVersion: game.currentVersion,
+      installedVersion: game.installedVersion
+    });
+    await this.app.db.upsertGameFolder(game.id, {
+      folderName: source.folderName, folderPath: finalPath, version, versionSource: "inferred"
+    });
+    await this.app.syncGameFolders(game.id, { game: this.app.db.getGameById(game.id), rootOverride });
+    this.app.emitChange();
+    await this.app.logger.info("Added existing game folder.", { gameId: game.id, folderPath: finalPath, mode });
+    return this.app.db.getGameById(game.id);
   }
 
   async movePath(sourcePath, destinationPath) {

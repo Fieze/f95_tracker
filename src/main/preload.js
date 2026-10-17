@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("f95App", {
   deleteArchiveFile: (jobId) => ipcRenderer.invoke("jobs:deleteFile", { jobId }),
   startDownload: (payload) => ipcRenderer.invoke("downloads:start", payload),
   cancelDownload: (jobId) => ipcRenderer.invoke("downloads:cancel", { jobId }),
+  addExistingFolder: (payload) => ipcRenderer.invoke("folders:addExisting", payload),
   dismissActivity: (activityId) => ipcRenderer.invoke("activities:dismiss", activityId),
   openLink: (url) => ipcRenderer.invoke("links:open", url),
   onStateChanged: (handler) => ipcRenderer.on("state:changed", handler)

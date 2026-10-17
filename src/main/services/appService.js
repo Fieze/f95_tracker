@@ -75,6 +75,7 @@ class AppService {
     this.nextActivityId = 1;
     this.activityTimers = new Map();
     this.pendingThreadUrls = new Set();
+    this.pendingFolderPaths = new Set();
     this.addThreadQueue = Promise.resolve();
     this.fetcher = new ThreadFetcher(authSession, fetcherOptions);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
@@ -317,6 +318,42 @@ class AppService {
         await this.logger.error("Background thread import failed.", { threadUrl: normalizedUrl, message: error.message });
       } finally {
         this.pendingThreadUrls.delete(normalizedUrl);
+      }
+    };
+    this.addThreadQueue = this.addThreadQueue.then(run, run);
+    return { queued: true, activityId };
+  }
+
+  // Adds an existing game folder (to a library game or a new one from a thread URL) in the background.
+  // The folder is validated right away so mistakes show up in the dialog; moving and importing report in the status line.
+  async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "" } = {}) {
+    if (!["keep", "move"].includes(mode)) throw new Error("Unknown option for the folder.");
+    const source = await this.validateExistingFolder(folderPath, mode);
+    let existingGame = null;
+    let normalizedUrl = "";
+    if (gameId) {
+      existingGame = this.db.getGameById(Number(gameId));
+      if (!existingGame) throw new Error("Game not found.");
+    } else {
+      normalizedUrl = normalizeThreadUrl(threadUrl);
+    }
+    const key = process.platform === "win32" ? source.folderPath.toLowerCase() : source.folderPath;
+    if (this.pendingFolderPaths.has(key)) return { queued: false, duplicate: true };
+    this.pendingFolderPaths.add(key);
+
+    const verb = mode === "move" ? "Moving" : "Adding";
+    const activityId = this.startActivity("add-folder", `${verb} folder ${source.folderName}`);
+    const run = async () => {
+      try {
+        const game = existingGame || (await this.addThread(normalizedUrl));
+        this.updateActivity(activityId, { label: `${verb} folder ${source.folderName} to ${game.title}` });
+        await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode });
+        this.finishActivity(activityId, { message: `${mode === "move" ? "Moved" : "Added"} ${source.folderName} (${game.title})` });
+      } catch (error) {
+        this.finishActivity(activityId, { error: error.message });
+        await this.logger.error("Adding an existing folder failed.", { folderPath: source.folderPath, message: error.message });
+      } finally {
+        this.pendingFolderPaths.delete(key);
       }
     };
     this.addThreadQueue = this.addThreadQueue.then(run, run);
@@ -871,6 +908,8 @@ const delegatedMethods = {
     "validateInstallPath",
     "moveInstallPathToExpected",
     "movePath",
+    "validateExistingFolder",
+    "addExistingFolder",
     "syncAllManagedFolders",
     "syncGameFolders",
     "ensureGameRootForGame",
@@ -900,7 +939,7 @@ for (const [service, names] of Object.entries(delegatedMethods)) {
 }
 
 // Gate top-level operations; nested calls retain the same operation context.
-for (const name of ["bootstrap","getState","updateSettings","exportDataToFile","deleteGame","setInstalledVersion","updateGameFolderVersion","updateGameSeasons","updateGameFolderMetadata","deleteGameFolder","refreshGameFolders","listLaunchExecutables","launchExecutable","moveInstallPathToExpected","addThread","refreshGame","refreshAllGames","deleteArchiveFile","processArchive","resolveArchiveMatch","extractJob","startResolvedDownload","logout","pollManagedFolders","createBackup","syncGameFolders","syncAllManagedFolders","pruneMissingArchiveJobs"]) {
+for (const name of ["bootstrap","getState","updateSettings","exportDataToFile","deleteGame","setInstalledVersion","updateGameFolderVersion","updateGameSeasons","updateGameFolderMetadata","deleteGameFolder","refreshGameFolders","listLaunchExecutables","launchExecutable","moveInstallPathToExpected","addThread","addExistingFolder","refreshGame","refreshAllGames","deleteArchiveFile","processArchive","resolveArchiveMatch","extractJob","startResolvedDownload","logout","pollManagedFolders","createBackup","syncGameFolders","syncAllManagedFolders","pruneMissingArchiveJobs"]) {
   const operation = AppService.prototype[name];
   AppService.prototype[name] = async function (...args) { return this.gate.run(() => operation.apply(this, args)); };
 }

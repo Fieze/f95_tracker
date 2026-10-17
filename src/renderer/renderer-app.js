@@ -120,6 +120,7 @@ function renderOverlays() {
   const settingsOpen = state.openOverlay === "settings";
   const loginOpen = state.openOverlay === "login";
   const addThreadOpen = state.openOverlay === "add-thread";
+  const addFolderOpen = state.openOverlay === "add-folder";
   const gameDetailsOpen = state.openOverlay === "game-details";
   const editFolderOpen = state.openOverlay === "edit-folder";
 
@@ -129,6 +130,7 @@ function renderOverlays() {
   $("#settings-panel")?.classList.toggle("hidden", !settingsOpen);
   $("#login-panel")?.classList.toggle("hidden", !loginOpen);
   $("#add-thread-panel")?.classList.toggle("hidden", !addThreadOpen);
+  $("#add-folder-panel")?.classList.toggle("hidden", !addFolderOpen);
   $("#game-details-panel")?.classList.toggle("hidden", !gameDetailsOpen);
   $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
@@ -228,6 +230,7 @@ function scheduleReloadState(minIntervalMs = LIVE_STATE_RELOAD_INTERVAL_MS) {
 
 async function initialize() {
   initLibraryToolbar();
+  initAddFolderPanel();
   $("#settings-form").addEventListener("submit", handleSettingsSubmit);
   document.querySelectorAll(".browse-folder-button").forEach((button) => {
     button.addEventListener("click", handleBrowseFolderClick);

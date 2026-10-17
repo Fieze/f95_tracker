@@ -1772,3 +1772,67 @@ button:hover,
 .archive-queue-bar {
   bottom: var(--status-line-height);
 }
+
+.overlay-hint {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.link-button {
+  padding: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.folder-mode {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.folder-mode legend {
+  padding: 0 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.radio-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.radio-option input {
+  width: auto;
+  margin-top: 4px;
+}
+
+.radio-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.radio-option small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* The shared "hidden" class only had per-element rules; these elements are toggled with it too. */
+.rating-item.hidden,
+.os-item.hidden,
+.language-item.hidden,
+.censored-item.hidden,
+.developer-links.hidden,
+.changelog-section.hidden,
+.history-section.hidden,
+#add-folder-url-label.hidden {
+  display: none;
+}

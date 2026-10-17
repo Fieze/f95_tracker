@@ -81,6 +81,7 @@ function bindIpc() {
   });
   handle("auth:verify", async () => ctx.appService.verifyAuth());
   handle("games:addThread", async (_event, payload) => ctx.appService.addThreadInBackground(payload.url));
+  handle("folders:addExisting", async (_event, payload) => ctx.appService.addExistingFolderInBackground(payload));
   handle("activities:dismiss", async (_event, activityId) => ctx.appService.dismissActivity(Number(activityId)));
   handle("games:delete", async (_event, gameId) => ctx.appService.deleteGame(gameId));
   handle("games:refresh", async (_event, gameId) => ctx.appService.refreshGame(gameId));

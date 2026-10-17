@@ -18,3 +18,4 @@ require("./integration.test");
 require("./robustness.test");
 require("./libraryFilters.test");
 require("./scraping.test");
+require("./existingFolder.test");

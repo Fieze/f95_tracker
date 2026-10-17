@@ -183,6 +183,49 @@
         </label>
         <button class="primary" type="submit">Import Thread</button>
       </form>
+      <p class="overlay-hint">
+        Already have the game on disk?
+        <button id="open-add-folder-panel" class="link-button" type="button">Add an existing folder</button>
+      </p>
+    </section>
+
+    <section id="add-folder-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="add-folder-panel-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow">Import</p>
+          <h3 id="add-folder-panel-title">Add Existing Folder</h3>
+        </div>
+        <button class="overlay-close" type="button" data-close-overlay aria-label="Close add folder">Close</button>
+      </div>
+      <form id="add-folder-form" class="overlay-form">
+        <label>
+          Game folder
+          <div class="path-input-row">
+            <input name="folderPath" type="text" placeholder="D:\Games\Some Game v1.0" required />
+            <button id="browse-existing-folder" class="secondary" type="button">Browse</button>
+          </div>
+        </label>
+        <label>
+          Game
+          <select name="gameId"></select>
+        </label>
+        <label id="add-folder-url-label">
+          Thread URL
+          <input name="threadUrl" type="url" placeholder="https://f95zone.to/threads/..." />
+        </label>
+        <fieldset class="folder-mode">
+          <legend>What should happen to the folder?</legend>
+          <label class="radio-option">
+            <input type="radio" name="mode" value="keep" checked />
+            <span><strong>Add it where it is</strong><small>The folder stays in its current location.</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="mode" value="move" />
+            <span><strong>Move it into the install root</strong><small id="add-folder-destination"></small></span>
+          </label>
+        </fieldset>
+        <button class="primary" type="submit">Add Folder</button>
+      </form>
     </section>
 
     <section id="game-details-panel" class="overlay-panel overlay-panel-centered game-details-panel hidden" role="dialog" aria-modal="true" aria-labelledby="game-details-panel-title">
@@ -406,6 +449,7 @@
     <script src="./library-details.js"></script>
     <script src="./activities.js"></script>
     <script src="./status-line.js"></script>
+    <script src="./add-folder.js"></script>
     <script src="./settings.js"></script>
     <script src="./renderer-bootstrap.js"></script>
   </body>
