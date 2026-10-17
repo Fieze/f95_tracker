@@ -1,6 +1,6 @@
 {
   "name": "f95_tracker",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Windows desktop tracker for F95Zone game threads and local archives.",
   "main": "src/main/main.js",
   "scripts": {
