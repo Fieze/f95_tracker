@@ -130,6 +130,19 @@ npm.cmd run test:ui
 
 This opens a hidden test window, uses local fixtures for authentication, download responses, and game launch, and records `.cache/ui-smoke.json` and `.cache/ui-smoke.png`. It does not authenticate against real hosts or launch a real game.
 
+## Releases And Auto-Update
+
+`npm.cmd run build` creates an NSIS installer, the portable exe, and `latest.yml` in `dist/` (unsigned).
+
+To publish a release, bump `version` in `package.json`, commit, then push a matching tag:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+`.github/workflows/release.yml` builds on GitHub and attaches installer, portable exe and `latest.yml` to the release. Installed copies check GitHub Releases at startup and every 6 hours, download new versions in the background and install them when the app quits. The portable build and dev runs never self-update. Because the builds are unsigned, Windows SmartScreen shows a warning on first launch ("More info" > "Run anyway").
+
 ## Safe Storage And Installations
 
 - Database saves are serialized and atomically replaced. The first startup with an existing database preserves `backups/pre-safety-upgrade.sqlite` before migration; regular JSON backups continue separately.

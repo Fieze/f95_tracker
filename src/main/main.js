@@ -15,6 +15,7 @@ const { restoreMainWindow, createTray, showGameUpdateNotification } = require(".
 const { hardenSession, createWindow } = require("./windows");
 const { attachDownloadSessionListeners } = require("./downloadWindow");
 const { bindIpc } = require("./ipc");
+const { startAutoUpdate, stopAutoUpdate } = require("./updater");
 
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_USER_MODEL_ID);
@@ -71,6 +72,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   createTray();
   await createWindow();
   await ctx.logger.info("Application ready.");
+  startAutoUpdate();
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -108,6 +110,7 @@ app.on("before-quit", (event) => {
   ctx.appService.archiveQueue.closed = true;
   if (shutdownPromise) return;
   shutdownPromise = (async () => {
+    stopAutoUpdate();
     await ctx.logger?.info("Application shutting down.");
     await ctx.appService.dispose();
     await Promise.all([ctx.logger, ctx.downloadLogger, ctx.extractionLogger, ctx.parsingLogger].map((entry) => entry?.state.writeQueue));
