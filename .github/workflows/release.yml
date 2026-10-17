@@ -20,7 +20,19 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - name: Build and publish
+      # electron-builder publishes each target in parallel and would otherwise create one draft per
+      # publisher on a fresh tag (seen on v1.0.1). Create the draft first so all uploads share it.
+      - name: Create draft release
+        shell: bash
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and upload assets
         run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
+        shell: bash
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

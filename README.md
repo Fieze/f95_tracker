@@ -141,7 +141,7 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-`.github/workflows/release.yml` builds on GitHub and attaches installer, portable exe and `latest.yml` to the release. Installed copies check GitHub Releases at startup and every 6 hours, download new versions in the background and install them when the app quits. The portable build and dev runs never self-update. Because the builds are unsigned, Windows SmartScreen shows a warning on first launch ("More info" > "Run anyway").
+`.github/workflows/release.yml` builds on GitHub, publishes the release and attaches installer, portable exe and `latest.yml` to the release. Installed copies check GitHub Releases at startup and every 6 hours, download new versions in the background and install them when the app quits. The portable build and dev runs never self-update. Because the builds are unsigned, Windows SmartScreen shows a warning on first launch ("More info" > "Run anyway").
 
 ## Safe Storage And Installations
 
