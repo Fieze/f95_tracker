@@ -232,8 +232,9 @@ test("adding a thread in the background returns at once and reports through acti
   assert.match(state.activities[0].label, /example game/i);
 
   release();
-  await waitFor(async () => (await service.getState()).games.length === 1, "the import to finish");
+  await waitFor(async () => (await service.getState()).activities[0]?.status === "done", "the import to finish");
   state = await service.getState();
+  assert.equal(state.games.length, 1);
   assert.equal(state.activities[0].status, "done");
   assert.match(state.activities[0].message, /Added Example Game/);
   service.dismissActivity(state.activities[0].id);
