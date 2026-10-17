@@ -115,6 +115,7 @@ async function createLoginWindow() {
   ctx.loginWindow.on("closed", () => {
     ctx.logger?.info("Login window closed.");
     ctx.loginWindow = null;
+    ctx.appService?.resumeAfterBrowserCheck();
   });
 }
 

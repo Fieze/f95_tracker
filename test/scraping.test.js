@@ -14,12 +14,14 @@ function htmlResponse(html, init = {}) {
 }
 
 async function createService(t, { sessionFetch, cookies = [] } = {}) {
+  const fetcherOptions = { minIntervalMs: 0, jitterMs: 0 };
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "f95-scrape-"));
   const service = new AppService({
     userDataPath: root,
     authSession: { cookies: { get: async () => cookies }, fetch: sessionFetch },
     folderWatcher: { start: async () => {}, stop: async () => {}, ignoreFile: () => {} },
-    onStateChanged: () => {}
+    onStateChanged: () => {},
+    fetcherOptions
   });
   await service.db.initialize();
   t.after(async () => {
@@ -96,4 +98,63 @@ test("verifyAuth reports the logged-in state stated by the page", async (t) => {
   const result = await service.verifyAuth();
   assert.equal(result.pageLoggedIn, false);
   assert.equal(result.ok, false);
+});
+
+const challengeResponse = () => new Response("<title>Just a moment...</title>", { status: 403, headers: { "cf-mitigated": "challenge" } });
+
+test("thread fetcher paces requests and serialises them", async () => {
+  let time = 1000;
+  const sleeps = [];
+  const starts = [];
+  const fetcher = new ThreadFetcher(
+    { cookies: { get: async () => [] }, fetch: async () => { starts.push(time); return htmlResponse("<html></html>"); } },
+    { minIntervalMs: 1500, jitterMs: 0, now: () => time, sleep: async (ms) => { sleeps.push(ms); time += ms; } }
+  );
+  await Promise.all([fetcher.fetchThread(threadUrl), fetcher.fetchThread(threadUrl), fetcher.fetchThread(threadUrl)]);
+  assert.deepEqual(sleeps, [1500, 1500]);
+  assert.deepEqual(starts, [1000, 2500, 4000]);
+});
+
+test("after a challenge the fetcher pauses without contacting the site until it is reset or the cooldown ends", async () => {
+  let time = 0;
+  let calls = 0;
+  const fetcher = new ThreadFetcher(
+    { cookies: { get: async () => [] }, fetch: async () => { calls += 1; return calls === 1 ? challengeResponse() : htmlResponse("<html>ok</html>"); } },
+    { minIntervalMs: 0, jitterMs: 0, cooldownMs: 600000, now: () => time }
+  );
+  await assert.rejects(() => fetcher.fetchThread(threadUrl), /browser check/);
+  assert.equal(calls, 1);
+
+  await assert.rejects(() => fetcher.fetchThread(threadUrl), (error) => error.challenge && /paused/.test(error.message));
+  assert.equal(calls, 1, "a paused fetcher must not send further requests");
+
+  fetcher.resetChallenge();
+  assert.equal((await fetcher.fetchThread(threadUrl)).html, "<html>ok</html>");
+  assert.equal(calls, 2);
+
+  calls = 0;
+  await assert.rejects(() => fetcher.fetchThread(threadUrl), /browser check/);
+  time += 600001;
+  calls = 1;
+  assert.equal((await fetcher.fetchThread(threadUrl)).html, "<html>ok</html>");
+});
+
+test("refreshing all games stops after the first browser check instead of retrying every game", async (t) => {
+  let currentHtml = await fixture("renpy-logged-in");
+  let requests = 0;
+  const service = await createService(t, {
+    sessionFetch: async () => { requests += 1; return currentHtml ? htmlResponse(currentHtml) : challengeResponse(); }
+  });
+  await service.addThread("https://f95zone.to/threads/example-game.1/");
+  await service.addThread("https://f95zone.to/threads/example-two.2/");
+  await service.addThread("https://f95zone.to/threads/example-three.3/");
+  currentHtml = "";
+  requests = 0;
+  service.fetcher.cooldownMs = 600000;
+  await service.refreshAllGames();
+  assert.equal(requests, 1, "only the first request may reach the site");
+  service.resumeAfterBrowserCheck();
+  currentHtml = await fixture("renpy-logged-in");
+  await service.refreshAllGames();
+  assert.ok(requests > 1);
 });

@@ -20,7 +20,7 @@ async function hideMainWindowToTray() {
     return;
   }
 
-  await ctx.logger?.info("Hiding main window to ctx.tray.");
+  await ctx.logger?.info("Hiding main window to tray.");
   ctx.mainWindow.setSkipTaskbar(true);
   ctx.mainWindow.hide();
 }

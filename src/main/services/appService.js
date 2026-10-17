@@ -17,7 +17,7 @@ const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 class AppService {
-  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess }) {
+  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess, fetcherOptions }) {
     this.onStateChanged = onStateChanged;
     this.onGameUpdateAvailable = onGameUpdateAvailable;
     this.authSession = authSession;
@@ -68,7 +68,7 @@ class AppService {
     this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
     this.sessionSeenLoggedIn = null;
-    this.fetcher = new ThreadFetcher(authSession);
+    this.fetcher = new ThreadFetcher(authSession, fetcherOptions);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
     this.extractArchiveWithProgress = extractArchiveWithProgress;
     this.folderWatcher = folderWatcher || new FolderWatcher({
@@ -372,6 +372,11 @@ class AppService {
       try {
         await this.refreshGame(game.id);
       } catch (error) {
+        if (error.challenge) {
+          // Every further request would just hit the same browser check; stop and wait for the user.
+          await this.logger.warn("Refresh stopped: F95Zone is asking for a browser check.", { message: error.message });
+          break;
+        }
         await this.logger.warn("Background refresh skipped failed game.", {
           gameId: game.id,
           title: game.title,
@@ -518,6 +523,11 @@ class AppService {
       hasSessionCookie: cookieMap.has("xf_session"),
       hasUserCookie: cookieMap.has("xf_user")
     };
+  }
+
+  // The user finished the browser check in the login window: allow scraping again.
+  resumeAfterBrowserCheck() {
+    this.fetcher.resetChallenge();
   }
 
   async verifyAuth() {

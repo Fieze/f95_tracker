@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const { app, BrowserWindow, dialog, session } = require("electron");
 const { AppService } = require("./services/appService");
 const { Logger } = require("./services/logger");
@@ -16,6 +18,20 @@ const { hardenSession, createWindow } = require("./windows");
 const { attachDownloadSessionListeners } = require("./downloadWindow");
 const { bindIpc } = require("./ipc");
 const { startAutoUpdate, stopAutoUpdate } = require("./updater");
+
+// Cloudflare ties its clearance cookie to the user agent. Version 1.0.3 briefly sent a modified one, which left
+// clearance cookies that no longer match; drop them once so a fresh browser check can succeed.
+async function resetStaleCloudflareClearance(authSession) {
+  const markerPath = path.join(app.getPath("userData"), "browser-identity.txt");
+  const identity = authSession.getUserAgent();
+  const previous = await fs.promises.readFile(markerPath, "utf8").catch(() => "");
+  if (previous === identity) return;
+  const cookies = await authSession.cookies.get({ domain: "f95zone.to" }).catch(() => []);
+  for (const cookie of cookies.filter((entry) => /^(cf_clearance|__cf_bm|cf_chl)/.test(entry.name))) {
+    await authSession.cookies.remove(`https://${cookie.domain.replace(/^\./, "")}${cookie.path}`, cookie.name).catch(() => {});
+  }
+  await fs.promises.writeFile(markerPath, identity).catch(() => {});
+}
 
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_USER_MODEL_ID);
@@ -43,9 +59,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
 
   const authSession = session.fromPartition(AUTH_PARTITION);
   hardenSession(authSession);
-  // Present a plain Chrome user agent (no app/Electron tokens) so the login window and the scraper share one
-  // browser identity; Cloudflare ties its clearance cookie to the user agent.
-  authSession.setUserAgent(authSession.getUserAgent().replace(/(\(KHTML, like Gecko\)).*?(\sChrome\/)/, "$1$2").replace(/\sElectron\/\S+/, ""));
+  await resetStaleCloudflareClearance(authSession);
   hardenSession(session.fromPartition(DOWNLOAD_PARTITION));
   hardenSession(session.defaultSession);
   attachDownloadSessionListeners();
