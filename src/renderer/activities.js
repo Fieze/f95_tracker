@@ -365,10 +365,20 @@ function renderArchiveQueueBar() {
   bar.dataset.mode = mode;
   summary.textContent = summaryText;
   count.textContent = String(openCount);
-  document.documentElement.style.setProperty(
-    "--archive-bar-reserved-space",
-    hasVisibleContent ? `var(--archive-bar-height-${mode})` : "0px"
-  );
+  syncArchiveBarReservedSpace();
+  if (!archiveBarResizeObserver && typeof ResizeObserver !== "undefined") {
+    archiveBarResizeObserver = new ResizeObserver(syncArchiveBarReservedSpace);
+    archiveBarResizeObserver.observe(bar);
+  }
+}
+
+// The bar's height follows its content (capped, then it scrolls); content below it keeps exactly that much room.
+let archiveBarResizeObserver = null;
+function syncArchiveBarReservedSpace() {
+  const bar = $("#archive-queue-bar");
+  if (!bar) return;
+  const occupied = bar.classList.contains("is-pending") ? 0 : Math.ceil(bar.getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--archive-bar-reserved-space", `${occupied}px`);
 }
 
 function renderExtractionStatus() {

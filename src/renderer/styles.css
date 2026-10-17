@@ -1902,3 +1902,26 @@ body.has-overlay {
   color: var(--muted);
   cursor: help;
 }
+
+/* The download/archive bar sizes to its content instead of fixed per-mode heights, so nothing is cut off. */
+.archive-queue-bar,
+.archive-queue-bar[data-mode] {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  max-height: min(420px, 42vh);
+}
+
+.archive-queue-bar.is-pending {
+  max-height: 0;
+}
+
+.archive-queue-header {
+  flex: none;
+}
+
+.archive-queue-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}

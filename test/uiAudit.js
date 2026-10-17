@@ -121,6 +121,13 @@ const MEASURE = `(() => {
       clipped.push((element.id ? "#" + element.id : "") + "." + String(element.className).split(" ").filter(Boolean).slice(0, 2).join(".") + " \\"" + element.textContent.trim().slice(0, 40) + "\\"");
     }
   });
+  document.querySelectorAll("body *").forEach((element) => {
+    if (!visible(element) || element.closest("svg")) return;
+    const style = getComputedStyle(element);
+    if (element.scrollHeight > element.clientHeight + 2 && element.clientHeight > 0 && (style.overflowY === "hidden" || style.overflowY === "clip") && element.textContent.trim() && style.display !== "inline") {
+      clipped.push("vertical " + (element.id ? "#" + element.id : "") + "." + String(element.className).split(" ").filter(Boolean).slice(0, 2).join(".") + " " + element.clientHeight + "<" + element.scrollHeight);
+    }
+  });
   if (clipped.length) issues.push({ type: "clipped-text", elements: clipped.slice(0, 8), count: clipped.length });
   const smallTargets = [];
   document.querySelectorAll("button, a, input, select").forEach((element) => {
