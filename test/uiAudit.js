@@ -142,6 +142,99 @@ const MEASURE = `(() => {
   return JSON.stringify(issues);
 })()`;
 
+// Every visible piece of text with its colour and box; the contrast is measured against the rendered pixels.
+const TEXT_ITEMS = `(() => {
+  const items = [];
+  const parse = (value) => { const m = value.match(/rgba?\\(([^)]+)\\)/); if (!m) return null; const [r, g, b, a = 1] = m[1].split(",").map((part) => parseFloat(part)); return { r, g, b, a }; };
+  const effectiveOpacity = (element) => { let opacity = 1; for (let node = element; node && node.nodeType === 1; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity); return opacity; };
+  const seen = new Set();
+  const openPanel = [...document.querySelectorAll(".overlay-panel")].find((panel) => getComputedStyle(panel).display !== "none");
+  const consider = (element, text, color, rect, fontSize, fontWeight) => {
+    const key = [text.slice(0, 30), color.r, color.g, color.b, color.a, Math.round(rect.left), Math.round(rect.top)].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ label: (element.id ? "#" + element.id : "") + "." + String(element.className).split(" ").filter(Boolean).slice(0, 2).join("."), text: text.slice(0, 40), color, opacity: effectiveOpacity(element), fontSize, fontWeight,
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
+  };
+  document.querySelectorAll("body *").forEach((element) => {
+    if (element.closest("svg, .visually-hidden, script, style, template")) return;
+    // Behind an open dialog the page is dimmed and blurred; only the dialog, topbar and status line are read.
+    if (openPanel && !element.closest(".topbar, #status-line") && !openPanel.contains(element)) return;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return;
+    // Text that is cut off by a scrolling parent or hidden below the status line cannot be measured reliably.
+    const statusTop = document.querySelector("#status-line")?.getBoundingClientRect().top ?? innerHeight;
+    if (rect.bottom > statusTop + 1) return;
+    let clippedByParent = false;
+    for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      const parentStyle = getComputedStyle(parent);
+      if (parentStyle.overflowY === "visible" && parentStyle.overflowX === "visible") continue;
+      const box = parent.getBoundingClientRect();
+      if (rect.top < box.top - 1 || rect.bottom > box.bottom + 1 || rect.left < box.left - 1 || rect.right > box.right + 1) { clippedByParent = true; break; }
+    }
+    if (clippedByParent) return;
+    const direct = [...element.childNodes].filter((node) => node.nodeType === 3 && node.textContent.trim()).map((node) => node.textContent.trim()).join(" ");
+    const color = parse(style.color);
+    if (direct && color) consider(element, direct, color, rect, parseFloat(style.fontSize), Number(style.fontWeight));
+    if ((element.tagName === "INPUT" || element.tagName === "TEXTAREA") && element.placeholder && !element.value) {
+      const placeholder = parse(getComputedStyle(element, "::placeholder").color);
+      if (placeholder) consider(element, "placeholder: " + element.placeholder, placeholder, rect, parseFloat(style.fontSize), 400);
+    }
+  });
+  return JSON.stringify(items);
+})()`;
+
+const channel = (value) => { const v = value / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+const luminance = ({ r, g, b }) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+const contrastRatio = (one, two) => { const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x); return (high + 0.05) / (low + 0.05); };
+
+// Most common colour inside the text's box is the background (text pixels are the minority).
+function dominantColor(bitmap, imageWidth, imageHeight, rect, scale) {
+  const x0 = Math.max(0, Math.floor(rect.left * scale)), x1 = Math.min(imageWidth, Math.ceil((rect.left + rect.width) * scale));
+  const y0 = Math.max(0, Math.floor(rect.top * scale)), y1 = Math.min(imageHeight, Math.ceil((rect.top + rect.height) * scale));
+  const counts = new Map();
+  let samples = 0;
+  const stepX = Math.max(1, Math.floor((x1 - x0) / 60)), stepY = Math.max(1, Math.floor((y1 - y0) / 14));
+  for (let y = y0; y < y1; y += stepY) for (let x = x0; x < x1; x += stepX) {
+    const offset = (y * imageWidth + x) * 4;
+    const key = ((bitmap[offset + 2] >> 3) << 10) | ((bitmap[offset + 1] >> 3) << 5) | (bitmap[offset] >> 3);
+    const entry = counts.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+    entry.n += 1; entry.r += bitmap[offset + 2]; entry.g += bitmap[offset + 1]; entry.b += bitmap[offset];
+    counts.set(key, entry);
+    samples += 1;
+  }
+  if (!samples) return null;
+  const top = [...counts.values()].sort((a, b) => b.n - a.n)[0];
+  return { r: top.r / top.n, g: top.g / top.n, b: top.b / top.n, share: top.n / samples };
+}
+
+function contrastFailures(image, items, viewportWidth) {
+  const { width, height } = image.getSize();
+  const bitmap = image.toBitmap();
+  const scale = width / viewportWidth;
+  const failures = [];
+  failures.stats = { texts: items.length, measured: 0 };
+  for (const item of items) {
+    const background = dominantColor(bitmap, width, height, item.rect, scale);
+    // Text over photos or gradients has no single background; those are reviewed by eye.
+    if (!background || background.share < 0.45) continue;
+    failures.stats.measured += 1;
+    const alpha = item.color.a * item.opacity;
+    const foreground = {
+      r: item.color.r * alpha + background.r * (1 - alpha),
+      g: item.color.g * alpha + background.g * (1 - alpha),
+      b: item.color.b * alpha + background.b * (1 - alpha)
+    };
+    const ratio = contrastRatio(foreground, background);
+    const large = item.fontSize >= 24 || (item.fontSize >= 18.66 && item.fontWeight >= 700);
+    const required = large ? 3 : 4.5;
+    if (ratio < required) failures.push(`${item.label} "${item.text}" ${ratio.toFixed(2)}:1 (needs ${required}) ${item.fontSize}px`);
+  }
+  return failures;
+}
+
 app.on("window-all-closed", () => {});
 app.whenReady().then(async () => {
   await fs.rm(outDir, { recursive: true, force: true });
@@ -226,14 +319,20 @@ app.whenReady().then(async () => {
       await settle();
       const issues = JSON.parse(await js(MEASURE));
       const file = `${size.name}__${state.name}.png`;
-      await fs.writeFile(path.join(outDir, file), (await window.webContents.capturePage()).toPNG());
-      report.push({ size: size.name, state: state.name, file, issues });
+      const image = await window.webContents.capturePage();
+      await fs.writeFile(path.join(outDir, file), image.toPNG());
+      const lowContrast = contrastFailures(image, JSON.parse(await js(TEXT_ITEMS)), size.width);
+      if (lowContrast.length) issues.push({ type: "low-contrast", count: lowContrast.length, samples: lowContrast.slice(0, 6) });
+      report.push({ size: size.name, state: state.name, file, issues, contrastChecked: lowContrast.stats });
     }
   }
   await fs.writeFile(path.join(outDir, "report.json"), JSON.stringify({ report, consoleErrors }, null, 2));
   for (const entry of report) {
     console.log(`${entry.size} ${entry.state}: ${entry.issues.length ? JSON.stringify(entry.issues) : "ok"}`);
   }
+  const total = report.reduce((sum, entry) => sum + entry.contrastChecked.texts, 0);
+  const measured = report.reduce((sum, entry) => sum + entry.contrastChecked.measured, 0);
+  console.log(`contrast: measured ${measured} of ${total} text elements (the rest sit on photos or gradients)`);
   if (consoleErrors.length) console.log("console errors:", consoleErrors.slice(0, 5));
   await service.dispose();
   await fs.rm(root, { recursive: true, force: true });

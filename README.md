@@ -114,6 +114,14 @@ npm.cmd run lint
 
 CI (`.github/workflows/ci.yml`) runs lint, the test suite and a runtime dependency audit on every push and pull request.
 
+### UI audit
+
+```powershell
+npm.cmd run audit:ui
+```
+
+Renders the real renderer with generated data at five window sizes (900x640 up to 1920x1080) in fifteen UI states (library, empty and filtered library, settings, login, dialogs, game details, busy status line and download drawer), saves screenshots to `.cache/ui-audit/` and reports overlapping panels, overflow, clipped text, small click targets and text contrast below WCAG AA. It uses local fixtures only and never contacts F95Zone.
+
 ### Tests
 
 ```powershell

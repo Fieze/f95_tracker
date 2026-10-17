@@ -2223,3 +2223,14 @@ textarea:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ---- Contrast (WCAG AA, measured by the UI audit) ---- */
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.status-idle {
+  opacity: 1;
+}
