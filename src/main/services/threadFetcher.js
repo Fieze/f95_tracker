@@ -3,7 +3,10 @@ const { normalizeThreadUrl } = require("./utils");
 class ThreadFetcher {
   constructor(authSession) {
     this.authSession = authSession;
+    this.controller = new AbortController();
   }
+
+  abort() { this.controller.abort(); }
 
   async buildCookieHeader(normalizedUrl) {
     const cookies = await this.authSession.cookies.get({ url: normalizedUrl });
@@ -23,6 +26,7 @@ class ThreadFetcher {
 
     const response = await fetch(normalizedUrl, {
       headers,
+      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(60000)]),
       redirect: "follow"
     });
 
@@ -60,6 +64,7 @@ class ThreadFetcher {
 
     const response = await fetch(normalizedUrl, {
       headers,
+      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(60000)]),
       redirect: "follow"
     });
 

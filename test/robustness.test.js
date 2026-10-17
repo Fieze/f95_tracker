@@ -1,0 +1,51 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("fs/promises");
+const os = require("os");
+const path = require("path");
+const { SyncScheduler } = require("../src/main/services/syncScheduler");
+const { DatabaseService } = require("../src/main/services/db");
+
+test("scheduler logs failures and backs off exponentially", async () => {
+  const warnings = [];
+  const scheduler = new SyncScheduler({
+    onTick: async () => { throw new Error("offline"); },
+    logger: { warn: async (message, details) => warnings.push({ message, details }) }
+  });
+  scheduler.baseIntervalMs = 60_000;
+  await scheduler.tick();
+  assert.equal(scheduler.failures, 1);
+  await scheduler.tick();
+  assert.equal(scheduler.failures, 2);
+  assert.equal(warnings.length, 2);
+  assert.equal(warnings[1].details.consecutiveFailures, 2);
+  scheduler.stop();
+  assert.equal(scheduler.timer, null);
+});
+
+test("scheduler resets backoff after a successful tick", async () => {
+  let fail = true;
+  const scheduler = new SyncScheduler({ onTick: async () => { if (fail) throw new Error("x"); } });
+  scheduler.baseIntervalMs = 60_000;
+  await scheduler.tick();
+  fail = false;
+  await scheduler.tick();
+  assert.equal(scheduler.failures, 0);
+  scheduler.stop();
+});
+
+test("concurrent persist calls are coalesced and the file holds the latest state", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "f95-persist-"));
+  const db = new DatabaseService(dir);
+  await db.initialize();
+  let writes = 0;
+  const original = db.enqueueWrite.bind(db);
+  db.enqueueWrite = (op) => { writes += 1; return original(op); };
+  const calls = [db.persist(), db.persist(), db.persist()];
+  db.db.run("INSERT INTO settings (key, value) VALUES ('probe', 'latest')");
+  await Promise.all([...calls, db.persist()]);
+  assert.ok(writes <= 2, `expected coalesced writes, got ${writes}`);
+  const reopened = new DatabaseService(dir);
+  await reopened.initialize();
+  assert.equal(reopened.first("SELECT value FROM settings WHERE key = 'probe'").value, "latest");
+});

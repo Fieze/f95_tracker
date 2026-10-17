@@ -1,280 +1,94 @@
 const path = require("path");
-const { fork, spawn } = require("child_process");
 const { resolveSevenZipBinary } = require("./sevenZip");
+const { runSevenZip } = require("./sevenZipRunner");
 
-function getIsPackaged() {
-  try {
-    const electron = require("electron");
-    if (electron && typeof electron !== "string" && electron.app) {
-      return electron.app.isPackaged;
-    }
-  } catch {
-    // Ignore: this module can also be required from plain Node contexts.
+function getBinary() {
+  let isPackaged = false;
+  try { isPackaged = Boolean(require("electron").app?.isPackaged); } catch {}
+  return resolveSevenZipBinary({ appRoot: path.resolve(__dirname, "..", "..", ".."), resourcesPath: process.resourcesPath, isPackaged });
+}
+
+function validateArchiveEntry(entry) {
+  const value = String(entry.path || "").replace(/\\/g, "/");
+  if (!value || value.startsWith("/") || value.includes(":") || value.split("/").includes("..") ||
+      entry.symbolicLink || entry.hardLink || /[Ll]/.test(entry.attributes || "") || /Symbolic Link|Reparse/i.test(entry.characteristics || "")) {
+    throw new Error("Unsafe archive entry: " + value);
   }
-
-  return false;
 }
 
-function extractArchiveWithProgress(archivePath, targetPath, onProgress) {
-  const workerPath = path.join(__dirname, "extractionWorker.js");
-  const sevenZipPath = resolveSevenZipBinary({
-    appRoot: path.resolve(__dirname, "..", "..", ".."),
-    resourcesPath: process.resourcesPath,
-    isPackaged: getIsPackaged()
-  });
-  const child = fork(workerPath, [], {
-    stdio: ["ignore", "ignore", "ignore", "ipc"]
-  });
-
-  let settled = false;
-  let lastPayload = null;
-  let watchdog = null;
-  const STALL_TIMEOUT_MS = 120000;
-
-  const completion = new Promise((resolve, reject) => {
-    const cleanup = () => {
-      if (watchdog) {
-        clearTimeout(watchdog);
-        watchdog = null;
-      }
-      child.removeAllListeners("message");
-      child.removeAllListeners("error");
-      child.removeAllListeners("exit");
-    };
-
-    const bumpWatchdog = () => {
-      if (watchdog) {
-        clearTimeout(watchdog);
-      }
-      watchdog = setTimeout(() => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        const stuckFile = lastPayload?.currentFile ? ` bei ${lastPayload.currentFile}` : "";
-        cleanup();
-        if (!child.killed) {
-          child.kill();
-        }
-        reject(new Error(`Archive extraction timed out${stuckFile}.`));
-      }, STALL_TIMEOUT_MS);
-    };
-
-    child.on("message", (message) => {
-      if (!message || typeof message !== "object") {
-        return;
-      }
-
-      if (message.type === "progress") {
-        lastPayload = message.payload || null;
-        bumpWatchdog();
-        onProgress?.(message.payload);
-        return;
-      }
-
-      if (message.type === "done" && !settled) {
-        settled = true;
-        cleanup();
-        resolve();
-        return;
-      }
-
-      if (message.type === "error" && !settled) {
-        settled = true;
-        cleanup();
-        reject(new Error(message.payload?.message || "Archive extraction failed."));
-      }
-    });
-
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error);
-    });
-
-    child.on("exit", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      if (code === 0 && !signal) {
-        settled = true;
-        cleanup();
-        resolve();
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new Error(`Extraction worker exited unexpectedly (${signal || code}).`));
-    });
-
-    bumpWatchdog();
-  });
-
-  child.send({
-    archivePath,
-    targetPath,
-    sevenZipPath
-  });
-  return {
-    completion,
-    terminate: () => {
-      if (!child.killed) {
-        child.kill();
-      }
-    }
-  };
-}
-
-function collectOutput(stream, onLine) {
-  let buffer = "";
-  stream.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      onLine(line);
-    }
-  });
-  stream.on("end", () => {
-    if (buffer) {
-      onLine(buffer);
-    }
-  });
-}
-
-function runSevenZip(sevenZipPath, args, { onStdoutLine, onStderrLine } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(sevenZipPath, args, {
-      windowsHide: true
-    });
-    let stderr = "";
-
-    collectOutput(child.stdout, (line) => {
-      onStdoutLine?.(line);
-    });
-    collectOutput(child.stderr, (line) => {
-      stderr += `${line}\n`;
-      onStderrLine?.(line);
-    });
-
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(stderr.trim() || `7z exited with code ${code}.`));
-    });
-  });
-}
-
-async function listArchiveEntries(sevenZipPath, archivePath) {
+async function listArchiveEntries(binary, archivePath, options = {}) {
   const entries = [];
-  let currentEntry = null;
+  let current = null;
   let inEntries = false;
-
-  await runSevenZip(sevenZipPath, ["l", "-slt", archivePath], {
-    onStdoutLine: (line) => {
+  const push = () => { if (current?.path) { validateArchiveEntry(current); entries.push(current); } current = null; };
+  const handle = runSevenZip(binary, ["l", "-slt", "--", archivePath], {
+    ...options,
+    onLine(line, stream) {
+      if (stream !== "stdout") return;
       const trimmed = line.trim();
-      if (/^-+$/.test(trimmed)) {
-        if (currentEntry?.path) {
-          entries.push(currentEntry);
-        }
-        currentEntry = null;
-        inEntries = !inEntries;
-        return;
-      }
-
-      if (!inEntries) {
-        return;
-      }
-
-      if (!trimmed) {
-        if (currentEntry?.path) {
-          entries.push(currentEntry);
-        }
-        currentEntry = null;
-        return;
-      }
-
+      if (/^-{5,}$/.test(trimmed)) { push(); inEntries = true; return; }
+      if (!inEntries) return;
+      if (!trimmed) { push(); return; }
       const separator = trimmed.indexOf(" = ");
-      if (separator === -1) {
-        return;
-      }
-
+      if (separator === -1) return;
       const key = trimmed.slice(0, separator);
       const value = trimmed.slice(separator + 3);
-      if (key === "Path") {
-        currentEntry = {
-          path: value,
-          isDirectory: false
-        };
-        return;
-      }
-
-      if (key === "Folder" && currentEntry) {
-        currentEntry.isDirectory = value === "+";
+      if (key === "Path") { push(); current = { path: value, isDirectory: false }; }
+      else if (current) {
+        if (key === "Folder") current.isDirectory = value === "+";
+        if (key === "Symbolic Link") current.symbolicLink = value;
+        if (key === "Hard Link") current.hardLink = value;
+        if (key === "Attributes") current.attributes = value;
+        if (key === "Characteristics") current.characteristics = value;
       }
     }
   });
-
-  if (currentEntry?.path) {
-    entries.push(currentEntry);
-  }
-
+  await handle.completion;
+  push();
   return entries;
 }
 
 function hasSingleRootDirectory(entries) {
-  if (!Array.isArray(entries) || entries.length === 0) {
-    return false;
-  }
-
-  const rootSegments = new Set();
+  if (!Array.isArray(entries) || !entries.length) return false;
+  const roots = new Set();
   for (const entry of entries) {
-    const normalizedPath = String(entry.path || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-    if (!normalizedPath) {
-      continue;
-    }
-
-    const segments = normalizedPath.split("/").filter(Boolean);
-    if (segments.length === 0) {
-      continue;
-    }
-
-    if (!entry.isDirectory && segments.length === 1) {
-      return false;
-    }
-
-    rootSegments.add(segments[0]);
-    if (rootSegments.size > 1) {
-      return false;
-    }
+    const segments = String(entry.path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+    if (!segments.length || (!entry.isDirectory && segments.length === 1)) return false;
+    roots.add(segments[0]);
   }
-
-  return rootSegments.size === 1;
+  return roots.size === 1;
 }
 
-async function archiveHasSingleRootDirectory(archivePath) {
-  const sevenZipPath = resolveSevenZipBinary({
-    appRoot: path.resolve(__dirname, "..", "..", ".."),
-    resourcesPath: process.resourcesPath,
-    isPackaged: getIsPackaged()
-  });
-
-  if (!sevenZipPath) {
-    throw new Error("7z binary path is missing.");
-  }
-
-  const entries = await listArchiveEntries(sevenZipPath, archivePath);
-  return hasSingleRootDirectory(entries);
+async function archiveHasSingleRootDirectory(archivePath, options) {
+  return hasSingleRootDirectory(await listArchiveEntries(getBinary(), archivePath, options));
 }
 
-module.exports = {
-  archiveHasSingleRootDirectory,
-  extractArchiveWithProgress,
-  hasSingleRootDirectory
-};
+function extractArchiveWithProgress(archivePath, targetPath, onProgress, options = {}) {
+  const binary = getBinary();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
+  let active;
+  const completion = (async () => {
+    const entries = await listArchiveEntries(binary, archivePath, { signal: controller.signal });
+    let processedFiles = 0;
+    const totalFiles = entries.filter((entry) => !entry.isDirectory).length;
+    const startedAt = new Date().toISOString();
+    onProgress?.({ processedFiles, totalFiles, currentFile: "", startedAt });
+    active = runSevenZip(binary, ["x", "-y", "-bb1", "-bsp1", "-bso1", "-bse2", "-o" + targetPath, "--", archivePath], {
+      signal: controller.signal,
+      onLine(line, stream) {
+        if (stream !== "stdout") return;
+        const file = line.trim().match(/^(?:Extracting|Inflating)\s+(.+)$|^- (.+)$/i);
+        const percent = line.match(/(\d+)%/);
+        if (file) processedFiles++;
+        if (file || percent) onProgress?.({ processedFiles, totalFiles, currentFile: file?.[1] || file?.[2] || "", percent: percent ? Number(percent[1]) : undefined, startedAt });
+      }
+    });
+    await active.completion;
+  })().finally(() => options.signal?.removeEventListener("abort", abort));
+  return { completion, async terminate() { controller.abort(); await completion.catch(() => {}); } };
+}
+
+module.exports = { archiveHasSingleRootDirectory, extractArchiveWithProgress, hasSingleRootDirectory, listArchiveEntries, validateArchiveEntry };

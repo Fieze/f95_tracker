@@ -1600,3 +1600,30 @@ button:hover,
     width: 100%;
   }
 }
+
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.library-toolbar input[type="search"] {
+  max-width: 280px;
+}
+
+.library-toolbar select {
+  width: auto;
+}
+
+.library-toolbar input,
+.library-toolbar select {
+  padding: 8px 12px;
+}
+
+.library-count {
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}

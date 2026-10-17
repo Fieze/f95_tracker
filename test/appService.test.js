@@ -1,7 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs/promises");
-const http = require("http");
 const os = require("os");
 const path = require("path");
 const { AppService } = require("../src/main/services/appService");
@@ -16,7 +15,9 @@ async function createService(options = {}) {
       }
     },
     onStateChanged: () => {},
-    onGameUpdateAvailable: options.onGameUpdateAvailable
+    onGameUpdateAvailable: options.onGameUpdateAvailable,
+    downloadFetch: options.downloadFetch,
+    folderWatcher: { start: async () => {}, stop: async () => {}, ignoreFile: () => {} }
   });
   await service.db.initialize();
   return { service, userDataPath };
@@ -851,7 +852,10 @@ test("startResolvedDownload requires a configured watch folder", async (t) => {
 });
 
 test("startResolvedDownload streams files into the watch folder", async (t) => {
-  const { service, userDataPath } = await createService();
+  const { service, userDataPath } = await createService({ downloadFetch: async () => new Response("download payload", { headers: {
+    "content-type": "application/octet-stream", "content-length": "16",
+    "content-disposition": 'attachment; filename="sample.zip"'
+  } }) });
   const watchFolder = path.join(userDataPath, "watch");
   await service.updateSettings({
     watchFolder,
@@ -859,28 +863,9 @@ test("startResolvedDownload streams files into the watch folder", async (t) => {
     syncIntervalMinutes: 30
   });
 
-  const server = http.createServer((request, response) => {
-    if (request.url === "/archive") {
-      const payload = Buffer.from("download payload");
-      response.writeHead(200, {
-        "Content-Type": "application/octet-stream",
-        "Content-Length": payload.length,
-        "Content-Disposition": 'attachment; filename="sample.zip"'
-      });
-      response.end(payload);
-      return;
-    }
-
-    response.writeHead(404);
-    response.end("missing");
-  });
-
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  const archiveUrl = `http://127.0.0.1:${address.port}/archive`;
+  const archiveUrl = "https://download.example/archive";
 
   t.after(async () => {
-    server.close();
     await service.dispose();
     await fs.rm(userDataPath, { recursive: true, force: true });
   });
@@ -1108,6 +1093,7 @@ test("extractJob marks invalid archives as failed instead of throwing through IP
 
   await assert.doesNotReject(() => service.extractJob(job.id, game.id, "0.9.2"));
 
+  await service.archiveQueue.waitIdle();
   const failedJob = service.db.listArchiveJobs().find((entry) => entry.id === job.id);
   assert.equal(failedJob.status, "failed");
   assert.match(failedJob.errorText, /cannot open the file as archive/i);

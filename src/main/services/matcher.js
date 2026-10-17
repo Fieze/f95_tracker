@@ -1,5 +1,5 @@
 const path = require("path");
-const { compareVersions, safeJsonParse, sanitizeVersion, slugify } = require("./utils");
+const { safeJsonParse, sanitizeVersion, slugify } = require("./utils");
 
 function normalizeVersionCandidate(value) {
   return sanitizeVersion(String(value || "").replace(/\s+/g, " ").trim())

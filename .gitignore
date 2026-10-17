@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local helper files
 temp_paths.js
+
+# Test and verification caches
+.cache/

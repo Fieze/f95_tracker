@@ -2,6 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>F95 Thread Tracker</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -53,6 +57,22 @@
         <section class="panel section-panel">
           <div class="section-heading">
             <h3>Games</h3>
+            <div class="library-toolbar" role="search">
+              <input id="library-search" type="search" placeholder="Search title, developer, tags" aria-label="Search library" />
+              <select id="library-filter" aria-label="Filter library">
+                <option value="all">All games</option>
+                <option value="updates">Updates available</option>
+                <option value="installed">Installed</option>
+                <option value="not-installed">Not installed</option>
+              </select>
+              <select id="library-sort" aria-label="Sort library">
+                <option value="title">Title</option>
+                <option value="updates-first">Updates first</option>
+                <option value="recently-synced">Recently synced</option>
+                <option value="release-date">Release date</option>
+              </select>
+              <span id="library-count" class="library-count" aria-live="polite"></span>
+            </div>
           </div>
           <div id="games-list" class="games-list empty-state">No threads added yet.</div>
         </section>
@@ -96,6 +116,15 @@
         <span id="settings-status" class="status-chip muted">ready</span>
       </div>
       <form id="settings-form" class="overlay-form">
+        <label>F95 API Key
+          <input id="api-key" type="password" autocomplete="off" placeholder="Enter a new key; saved keys are never displayed" />
+        </label>
+        <p id="api-status" class="auth-status"></p>
+        <div class="settings-data-actions">
+          <button id="api-save" class="secondary" type="button">Save API Key</button>
+          <button id="api-test" class="secondary" type="button">Test Connection</button>
+          <button id="api-remove" class="secondary" type="button">Remove Key</button>
+        </div>
         <label>
           Watch Folder
           <div class="path-input-row">
@@ -304,6 +333,10 @@
         <div class="content-block">
           <h5 class="content-heading">Overview</h5>
           <p class="overview"></p>
+          <details class="changelog-section hidden">
+            <summary>Changelog</summary>
+            <p class="overview changelog"></p>
+          </details>
         </div>
         <div class="content-block">
           <h5 class="content-heading">Genre</h5>
@@ -353,5 +386,10 @@
     </div>
 
     <script src="./renderer-app.js"></script>
+    <script src="./library-filters.js"></script>
+    <script src="./library-details.js"></script>
+    <script src="./activities.js"></script>
+    <script src="./settings.js"></script>
+    <script src="./renderer-bootstrap.js"></script>
   </body>
 </html>

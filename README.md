@@ -106,11 +106,41 @@ npm.cmd install
 npm.cmd start
 ```
 
+### Lint
+
+```powershell
+npm.cmd run lint
+```
+
+CI (`.github/workflows/ci.yml`) runs lint, the test suite and a runtime dependency audit on every push and pull request.
+
 ### Tests
 
 ```powershell
 npm.cmd test
 ```
+
+The suite includes real bundled 7-Zip processing, process cancellation, Windows junction protection, and the folder watcher. It uses `.cache/test-tmp` inside the project; restricted sandboxes may require permission to create junctions and run these integration tests. Permission failures are reported as failures.
+
+For an isolated Electron renderer/preload smoke test:
+
+```powershell
+npm.cmd run test:ui
+```
+
+This opens a hidden test window, uses local fixtures for authentication, download responses, and game launch, and records `.cache/ui-smoke.json` and `.cache/ui-smoke.png`. It does not authenticate against real hosts or launch a real game.
+
+## Safe Storage And Installations
+
+- Database saves are serialized and atomically replaced. The first startup with an existing database preserves `backups/pre-safety-upgrade.sqlite` before migration; regular JSON backups continue separately.
+- Imports are validated in a separate database and backed up before replacement. Finish active operations, downloads, and requested archive jobs before importing.
+- Archive extraction runs through one FIFO queue and validates paths and links before publishing files. Temporary output is kept under `.f95-staging`; only directories marked as belonging to the current app data directory are cleaned up.
+- Every extracted release receives its own versioned installation folder. Existing folders are retained; duplicate versions receive suffixes such as ` (2)`.
+- Installation deletion is restricted to directories inside the configured game roots and rejects symbolic links and junctions. External installations remain visible but cannot be recursively deleted through the app.
+- Closing to the tray retains the existing behavior. Explicit quit stops background work, waits for the actual extraction process to end, and finishes database saves. Interrupted archive jobs can be resumed manually after restart.
+- External browser links accept only HTTP and HTTPS. The main renderer is the only authorized IPC sender.
+
+The backend separates downloads, archives, and installations into dedicated services; `AppService` coordinates shared state and lifecycle. Renderer scripts separate library/details, activities, and settings from shared state and initialization.
 
 ### Portable Windows Build
 
@@ -120,8 +150,18 @@ npm.cmd run build
 
 ## Notes
 
+### F95ApiDB
+
+In Settings, save your personal F95ApiDB key and use **Test Connection**. Metadata fetching then works without an F95Zone login. Account approval and separate download-link approval may be required by the provider. Keys are encrypted using Electron safeStorage in a separate file, never returned to the renderer or included in database exports. If secure storage is unavailable, the key lasts only for the current session.
+
+The API supplies metadata, changelog and image/download URLs. Existing image caching and host-download workflows remain in use. Empty optional fields and unavailable download lists preserve existing data. Missing/unpublished or incomplete API records use the scraper once when a forum login is available; authentication, rate-limit and service errors do not trigger scraping. Without a key, the existing scraper remains active.
+
+Background sync batches 25 thread IDs, reloads changed entries and checks full details at least every 24 hours while the app runs. Requests are serialized at no more than one per second. Authentication failures pause API requests until the key is saved again or the connection is tested. On first migration of an existing database, `backups/pre-api-upgrade.sqlite` preserves its original contents. Old JSON exports remain importable; importing does not replace the separately stored key.
+
+Bookmarks and discovery features are disabled. Follow the [provider terms](https://f95api.xyz/terms): this integration is an ordinary user-run desktop client; do not connect keys to AI agents or MCP systems. Automated tests use local fixtures only. Validate real metadata, download permissions, images and changelog through the app with your approved account, then check download, installation and launch.
+
 - The app is designed for Windows.
 - Thread fetching and many download links require a valid F95Zone session.
 - Direct in-app downloading depends on host support and successful resolution of the final file URL.
 - Archive extraction uses bundled `7z` resources that are included in the packaged app.
-- All application data stays local unless you explicitly export it.
+- Library and installation data stay local. API mode sends requested thread IDs and API authentication to F95ApiDB; the app also requests forum assets and download hosts as needed.

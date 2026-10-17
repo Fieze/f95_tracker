@@ -1,3 +1,10 @@
+// Keep test files in the workspace: Windows sandbox temp directories restrict rename/realpath.
+const path = require("path");
+const testTempRoot = path.resolve(__dirname, "..", ".cache", "test-tmp");
+require("fs").mkdirSync(testTempRoot, { recursive: true });
+process.env.TEMP = testTempRoot;
+process.env.TMP = testTempRoot;
+process.env.TMPDIR = testTempRoot;
 require("./utils.test");
 require("./logger.test");
 require("./db.test");
@@ -6,3 +13,8 @@ require("./extractor.test");
 require("./appService.test");
 require("./parser.test");
 require("./sevenZip.test");
+require("./safety.test");
+require("./integration.test");
+require("./api.test");
+require("./robustness.test");
+require("./libraryFilters.test");

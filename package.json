@@ -7,7 +7,9 @@
     "start": "electron .",
     "postinstall": "node scripts/sync-7zip.js",
     "test": "node test/run.js",
-    "build": "electron-builder --win portable"
+    "test:ui": "electron test/electronSmoke.js",
+    "build": "electron-builder --win portable",
+    "lint": "eslint ."
   },
   "keywords": [
     "electron",
@@ -25,7 +27,9 @@
   },
   "devDependencies": {
     "electron": "^41.1.1",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0"
   },
   "build": {
     "appId": "com.f95tracker.app",

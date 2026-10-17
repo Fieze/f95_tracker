@@ -8,7 +8,7 @@ const { Logger } = require("../src/main/services/logger");
 async function listRotatedLogs(dirPath) {
   const entries = await fs.readdir(dirPath);
   return entries
-    .filter((entry) => /^app-log-[0-9T:-]+Z(?:-\d+)?\.txt$/i.test(entry))
+    .filter((entry) => /^app-log-[0-9T:\-]+Z(?:-\d+)?\.txt$/i.test(entry))
     .sort();
 }
 

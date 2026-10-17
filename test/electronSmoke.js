@@ -1,0 +1,113 @@
+// Runs the real renderer and preload against isolated local test data.
+// Remote login/download hosts and game processes are replaced by controlled fixtures.
+const { app, BrowserWindow, ipcMain, safeStorage } = require("electron");
+const fs = require("fs/promises");
+const path = require("path");
+const assert = require("assert/strict");
+const { AppService } = require("../src/main/services/appService");
+const { assertTrustedIpcSender } = require("../src/main/services/browserSafety");
+const { zipFixture } = require("./zipFixture");
+
+const cache = path.resolve(__dirname, "..", ".cache");
+app.setPath("userData", path.join(cache, "electron-smoke-profile"));
+let window, service;
+let loggedIn = false;
+const errors = [], launches = [], checks = [];
+
+app.whenReady().then(async () => {
+  await fs.mkdir(cache, { recursive: true });
+  const root = await fs.mkdtemp(path.join(cache, "ui-smoke-"));
+  service = new AppService({ userDataPath: root,
+    safeStorage, apiOptions: { fetchImpl: async () => Response.json({ items: [] }) },
+    authSession: { cookies: { get: async () => loggedIn ? [{ name: "xf_user", value: "test", domain: "f95zone.to", path: "/" }] : [], remove: async () => { loggedIn = false; } } },
+    folderWatcher: { start: async () => {}, stop: async () => {}, ignoreFile: () => {} },
+    downloadFetch: async () => new Response(zipFixture([{ name: "game.exe", content: "fixture executable" }]), {
+      headers: { "content-disposition": 'attachment; filename="fixture.zip"' }
+    }),
+    launchProcess: (file, args, options) => { launches.push({ file, options }); return { unref() {} }; },
+    onStateChanged: () => { if (window && !window.isDestroyed()) window.webContents.send("state:changed"); }
+  });
+  await service.db.initialize();
+  await service.db.saveSettings({ installRoot: path.join(root, "games"), watchFolder: path.join(root, "watch"), syncIntervalMinutes: 30 });
+  const game = await service.db.upsertGameFromThread({ sourceUrl: "https://f95zone.to/threads/ui-smoke.333/", title: "UI Smoke Game",
+    threadTitle: "UI Smoke Game", currentVersion: "1.0", developer: "Fixture Dev", engine: "Ren'Py", threadStatus: "Ongoing",
+    overview: "Local test fixture.", releaseDate: "2026-10-12", changelog: "Fixture changelog", bannerImage: null, screenshotImages: [], tags: ["test"],
+    aliases: [], warnings: [], rawOpHtml: "", rawOpText: "", parserDebug: {},
+    downloadGroups: [{ label: "Win", links: [{ label: "Pixeldrain", url: "https://pixeldrain.com/fixture.zip" }] }] });
+  const exportPath = path.join(root, "export.json");
+  const handle = (channel, listener) => ipcMain.handle(channel, (event, payload) => {
+    assertTrustedIpcSender(event, window);
+    return listener(payload);
+  });
+  handle("app:bootstrap", () => service.bootstrap());
+  handle("games:listLaunchExecutables", (payload) => service.listLaunchExecutables(payload));
+  handle("games:launchExecutable", (payload) => service.launchExecutable(payload));
+  handle("games:updateFolderMetadata", (payload) => service.updateGameFolderMetadata(payload, payload));
+  handle("settings:update", (payload) => service.updateSettings(payload));
+  handle("api:setKey", (payload) => service.setApiKey(payload.key));
+  handle("api:test", () => service.testApiConnection());
+  handle("auth:openLogin", () => { loggedIn = true; return service.getAuthState(); });
+  handle("auth:logout", () => service.logout());
+  handle("data:export", async () => { await service.exportDataToFile(exportPath); return { canceled: false, path: exportPath }; });
+  handle("data:import", async () => { await service.importDataFromFile(exportPath); return { canceled: false, path: exportPath }; });
+  handle("downloads:start", async (payload) => {
+    const job = service.createDownloadJob(payload);
+    return service.startResolvedDownload(job.id, { url: payload.url });
+  });
+
+  window = new BrowserWindow({ width: 1440, height: 920, show: false,
+    webPreferences: { preload: path.resolve(__dirname, "..", "src", "main", "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  window.webContents.on("console-message", (event) => { if (event.level === "error") errors.push(event.message); });
+  window.webContents.on("render-process-gone", (event, details) => errors.push(details.reason));
+  await window.loadFile(path.resolve(__dirname, "..", "src", "renderer", "index.html"));
+  const js = (code) => window.webContents.executeJavaScript(code);
+  await js("window.confirm = () => true; window.alert = (message) => { throw new Error(message); }; reloadState()");
+  assert.equal(await js("document.querySelectorAll('#games-list .game-tile').length"), 1); checks.push("library");
+  await js("document.querySelector('#games-list button').click()");
+  assert.equal(await js("document.querySelector('#game-details-panel').classList.contains('hidden')"), false); checks.push("details");
+  assert.equal(await js("document.querySelector('#game-details-panel .changelog').textContent"), "Fixture changelog");
+  await js("document.querySelector('#open-settings-panel').click(); handleExportData()");
+  await js("window.f95App.setApiKey('ui-fixture-key').then(() => undefined)");
+  checks.push("API key IPC");
+  await js("window.f95App.testApiConnection().then(() => undefined)");
+  checks.push("API test IPC");
+  await js("reloadState()");
+  assert.equal(await js("state.api.configured"), true);
+  assert.ok((await js("document.querySelector('#api-status').textContent")).includes("successful"));
+  assert.equal(await js("document.querySelector('#api-key').value"), "");
+  if (service.apiKeyStore.getState().persistent) {
+    assert.ok(!(await fs.readFile(service.apiKeyStore.filePath)).includes(Buffer.from("ui-fixture-key")));
+    assert.equal(service.apiKeyStore.getState().persistent, true);
+  }
+  checks.push("API rendering and secure storage");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await fs.writeFile(path.join(cache, "ui-api-settings.png"), (await window.webContents.capturePage()).toPNG());
+  await js("window.f95App.setApiKey('').then(reloadState)");
+  assert.equal(await js("state.api.configured"), false); checks.push("API settings, secure storage and connection fixture");
+  assert.equal(await js("document.querySelector('#settings-status').textContent"), "exported");
+  await js("handleImportData()");
+  assert.equal(await js("document.querySelector('#settings-status').textContent"), "imported"); checks.push("export/import");
+  await js("window.f95App.openLogin().then(reloadState)");
+  assert.equal(await js("state.auth.loggedIn"), true);
+  await js("window.f95App.logout().then(reloadState)");
+  assert.equal(await js("state.auth.loggedIn"), false); checks.push("login/logout fixture");
+  await js(`window.f95App.startDownload({ gameId: ${game.id}, url: 'https://pixeldrain.com/fixture.zip', label: 'Pixeldrain', detectedVersion: '1.0' })`);
+  await service.archiveQueue.waitIdle();
+  await js("reloadState()");
+  const folder = service.db.listGameFolders(game.id)[0];
+  assert.ok(folder);
+  await js(`window.f95App.launchExecutable({ folderId: ${folder.id} })`);
+  assert.equal(launches.length, 1); checks.push("download/extraction/launch fixture");
+  await js(`state.selectedGameId = ${game.id}; state.openOverlay = 'game-details'; render()`);
+  await fs.writeFile(path.join(cache, "ui-smoke.png"), (await window.webContents.capturePage()).toPNG());
+  assert.deepEqual(errors.filter((message) => !message.includes("Content-Security-Policy")), []);
+  await service.dispose(); checks.push("shutdown");
+  await fs.writeFile(path.join(cache, "ui-smoke.json"), JSON.stringify({ passed: true, checks, errors }, null, 2));
+  await fs.rm(root, { recursive: true, force: true });
+  window.destroy(); app.exit(0);
+}).catch(async (error) => {
+  await fs.mkdir(cache, { recursive: true });
+  await fs.writeFile(path.join(cache, "ui-smoke.json"), JSON.stringify({ passed: false, checks, error: error.stack || String(error), errors }, null, 2));
+  await service?.dispose().catch(() => {});
+  window?.destroy(); app.exit(1);
+});
