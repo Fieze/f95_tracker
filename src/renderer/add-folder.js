@@ -62,7 +62,7 @@ async function handleAddFolderSubmit(event) {
     });
     if (result?.duplicate) alert("This folder is already being added.");
     form.reset();
-    state.openOverlay = null;
+    closeAddFolderPanel();
     await reloadState();
   } catch (error) {
     alert(error.message);
@@ -87,16 +87,28 @@ async function handleBrowseExistingFolder() {
   }
 }
 
+// Opens the dialog, optionally for one specific game (from its details panel). Closing returns to where it was opened.
+function openAddFolderPanel(gameId = null) {
+  state.addFolderReturnToDetails = gameId !== null && state.openOverlay === "game-details";
+  populateAddFolderGames();
+  const form = $("#add-folder-form");
+  form.reset();
+  if (gameId !== null) form.elements.gameId.value = String(gameId);
+  updateAddFolderForm();
+  state.openOverlay = "add-folder";
+  render();
+}
+
+function closeAddFolderPanel() {
+  state.openOverlay = state.addFolderReturnToDetails && state.selectedGameId ? "game-details" : null;
+  state.addFolderReturnToDetails = false;
+}
+
 function initAddFolderPanel() {
   const form = $("#add-folder-form");
   form.addEventListener("submit", handleAddFolderSubmit);
   form.addEventListener("input", updateAddFolderForm);
   form.addEventListener("change", updateAddFolderForm);
   $("#browse-existing-folder").addEventListener("click", handleBrowseExistingFolder);
-  $("#open-add-folder-panel").addEventListener("click", () => {
-    populateAddFolderGames();
-    updateAddFolderForm();
-    state.openOverlay = "add-folder";
-    renderOverlays();
-  });
+  $("#open-add-folder-panel").addEventListener("click", () => openAddFolderPanel());
 }

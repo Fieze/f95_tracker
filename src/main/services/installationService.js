@@ -406,7 +406,9 @@ class InstallationService {
 
   // Checks a folder the user wants to add as an existing installation. Returns the resolved path and name;
   // throws a readable error for anything that must not be registered or moved.
-  async validateExistingFolder(folderPath, mode = "keep") {
+  // With a game, a move is also checked against that game's folder: a folder that is already inside it needs no
+  // move (alreadyInPlace), and the game's own folder (or a parent of it) cannot be moved into itself.
+  async validateExistingFolder(folderPath, mode = "keep", game = null) {
     const raw = String(folderPath || "").trim();
     if (!raw || !path.isAbsolute(raw)) throw new Error("Choose a folder first.");
     const resolved = path.resolve(raw);
@@ -435,26 +437,36 @@ class InstallationService {
       }
     }
 
+    let alreadyInPlace = false;
     if (mode === "move") {
       if (!settings.installRoot) throw new Error("Set an install root in Settings before moving a folder into it.");
-      if (isWithin(settings.installRoot, resolved)) throw new Error("This folder is already inside the install root; add it without moving.");
-      // Symbolic links or junctions inside the tree would be copied or broken by a move.
-      await assertSafeTree(resolved).catch(() => {
-        throw new Error("The folder contains symbolic links or junctions and cannot be moved safely.");
-      });
+      if (game) {
+        const gameRoot = path.resolve(buildInstallDirectory(settings.installRoot, game.title));
+        if (contains(resolved, gameRoot)) {
+          throw new Error(`This is the install folder of "${game.title}" itself (or contains it); pick one of the version folders inside it.`);
+        }
+        alreadyInPlace = isWithin(gameRoot, resolved);
+      }
+      if (!alreadyInPlace) {
+        // Symbolic links or junctions inside the tree would be copied or broken by a move.
+        await assertSafeTree(resolved).catch(() => {
+          throw new Error("The folder contains symbolic links or junctions and cannot be moved safely.");
+        });
+      }
     }
-    return { folderPath: resolved, folderName: path.basename(resolved) };
+    return { folderPath: resolved, folderName: path.basename(resolved), alreadyInPlace };
   }
 
   // Registers an existing game folder for a game, optionally moving it into <install root>/<game title>/.
   async addExistingFolder({ folderPath, gameId, mode = "keep" }) {
     const game = this.app.db.getGameById(Number(gameId));
     if (!game) throw new Error("Game not found.");
-    const source = await this.app.validateExistingFolder(folderPath, mode);
+    const source = await this.app.validateExistingFolder(folderPath, mode, game);
     let finalPath = source.folderPath;
     let rootOverride;
 
-    if (mode === "move") {
+    // The game's folder is only created here, once the move is confirmed and validated.
+    if (mode === "move" && !source.alreadyInPlace) {
       this.app.assertGameIdle(game.id);
       const installRoot = this.app.db.getSettings().installRoot;
       const gameRoot = await this.app.ensureGameRootForGame(game);

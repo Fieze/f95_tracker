@@ -174,6 +174,8 @@ function buildGameDetailsCard(selectedGame) {
   const groups = detailFragment.querySelector(".download-groups");
   const debugOutput = detailFragment.querySelector(".debug-output");
   const refreshButton = detailFragment.querySelector(".refresh-button");
+  const addFolderButton = detailFragment.querySelector(".add-folder-button");
+  addFolderButton.addEventListener("click", () => openAddFolderPanel(selectedGame.id));
   const deleteButton = detailFragment.querySelector(".delete-button");
   const threadLink = detailFragment.querySelector(".thread-link");
 

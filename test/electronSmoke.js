@@ -92,6 +92,14 @@ app.whenReady().then(async () => {
   assert.equal(await js("getComputedStyle(document.querySelector('#game-details-panel .rating-item')).display"), "none", "empty optional fields stay hidden");
   assert.equal(await js("document.querySelectorAll('#game-details-panel .history-entry').length"), 1, "first sync is recorded in the history");
   assert.equal(await js("getComputedStyle(document.querySelector('#game-details-panel .history-section')).display"), "block");
+  // Import button inside the game details: opens the dialog for exactly this game and returns to the details.
+  await js("document.querySelector('#game-details-panel .add-folder-button').click()");
+  assert.equal(await js("state.openOverlay"), "add-folder");
+  assert.equal(await js("document.querySelector('#add-folder-form').elements.gameId.selectedOptions[0].textContent"), "UI Smoke Game");
+  assert.equal(await js("getComputedStyle(document.querySelector('#add-folder-url-label')).display"), "none");
+  await js("document.querySelector('#overlay-backdrop').click()");
+  assert.equal(await js("state.openOverlay"), "game-details", "closing the dialog returns to the game details");
+  assert.equal(await js("state.selectedGameId !== null"), true); checks.push("details add folder button");
   await js("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   await fs.writeFile(path.join(cache, "ui-details.png"), (await window.webContents.capturePage()).toPNG());
   assert.equal(await js("getComputedStyle(document.querySelector('#game-details-panel .developer-links')).display"), "none");

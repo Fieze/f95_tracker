@@ -101,7 +101,6 @@ class AppService {
     const settings = this.db.getSettings();
     await this.applyRuntimeSettings(settings);
     await this.cleanupStagingDirectories();
-    await this.ensureAllGameRoots();
     await this.pollManagedFolders({ emitOnChange: false });
     await this.createBackup();
     this.startBackupScheduler();
@@ -140,7 +139,6 @@ class AppService {
       syncIntervalMinutes: payload.syncIntervalMinutes
     });
     await this.applyRuntimeSettings(settings);
-    await this.ensureAllGameRoots();
     await this.pollManagedFolders({ emitOnChange: false });
     this.emitChange();
     return this.getState();
@@ -214,7 +212,6 @@ class AppService {
       const settings = this.db.getSettings();
       await this.applyRuntimeSettings(settings);
       await this.cleanupStagingDirectories();
-      await this.ensureAllGameRoots();
       await this.pollManagedFolders({ emitOnChange: false });
       this.emitChange();
       await this.logger.info("Imported data snapshot.", { sourcePath });
@@ -328,7 +325,6 @@ class AppService {
   // The folder is validated right away so mistakes show up in the dialog; moving and importing report in the status line.
   async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "" } = {}) {
     if (!["keep", "move"].includes(mode)) throw new Error("Unknown option for the folder.");
-    const source = await this.validateExistingFolder(folderPath, mode);
     let existingGame = null;
     let normalizedUrl = "";
     if (gameId) {
@@ -337,6 +333,7 @@ class AppService {
     } else {
       normalizedUrl = normalizeThreadUrl(threadUrl);
     }
+    const source = await this.validateExistingFolder(folderPath, mode, existingGame);
     const key = process.platform === "win32" ? source.folderPath.toLowerCase() : source.folderPath;
     if (this.pendingFolderPaths.has(key)) return { queued: false, duplicate: true };
     this.pendingFolderPaths.add(key);
@@ -348,7 +345,8 @@ class AppService {
         const game = existingGame || (await this.addThread(normalizedUrl));
         this.updateActivity(activityId, { label: `${verb} folder ${source.folderName} to ${game.title}` });
         await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode });
-        this.finishActivity(activityId, { message: `${mode === "move" ? "Moved" : "Added"} ${source.folderName} (${game.title})` });
+        const moved = mode === "move" && !(await this.assetExists(source.folderPath));
+        this.finishActivity(activityId, { message: `${moved ? "Moved" : "Added"} ${source.folderName} (${game.title})` });
       } catch (error) {
         this.finishActivity(activityId, { error: error.message });
         await this.logger.error("Adding an existing folder failed.", { folderPath: source.folderPath, message: error.message });
@@ -369,7 +367,6 @@ class AppService {
     });
     const enriched = await this.hydrateThreadAssets(parsed);
     const game = await this.db.upsertGameFromThread(enriched);
-    await this.ensureGameRootForGame(game);
     await this.syncGameFolders(game.id, { game: this.db.getGameById(game.id) });
     this.emitChange();
     await this.logger.info("Thread added.", { gameId: game.id, title: game.title });
@@ -404,7 +401,6 @@ class AppService {
 
       const enriched = await this.hydrateThreadAssets(parsed, refreshMetadata);
       const updated = await this.db.upsertGameFromThread(enriched);
-      await this.ensureGameRootForGame(updated);
       await this.syncGameFolders(updated.id, { game: this.db.getGameById(updated.id) });
       const nextGame = this.db.getGameById(updated.id);
       await this.emitUpdateNotificationIfNeeded(game, nextGame);
@@ -844,7 +840,6 @@ class AppService {
     this.folderSyncInFlight = true;
     this.lastManagedFolderPollAt = Date.now();
     try {
-      await this.ensureAllGameRoots();
       const changed = await this.syncAllManagedFolders();
       if (changed && emitOnChange) {
         this.emitChange();

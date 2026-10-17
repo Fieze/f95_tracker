@@ -290,6 +290,8 @@ async function initialize() {
     if (state.openOverlay === "edit-folder") {
       state.editingFolderId = null;
       state.openOverlay = state.selectedGameId ? "game-details" : null;
+    } else if (state.openOverlay === "add-folder") {
+      closeAddFolderPanel();
     } else if (state.openOverlay === "game-details") {
       state.selectedGameId = null;
       state.editingFolderId = null;

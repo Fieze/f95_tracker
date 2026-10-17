@@ -84,7 +84,6 @@ test("unsafe folders are rejected", async (t) => {
   await check("relative/path", "keep", /Choose a folder/);
   await fs.mkdir(dirs.watchFolder, { recursive: true });
   await check(dirs.watchFolder, "keep", /watch folder/);
-  await check(path.join(dirs.installRoot, "Example Game"), "move", /already inside the install root/);
 
   const folder = await makeFolder("Registered Game");
   await service.addExistingFolder({ folderPath: folder, gameId: game.id, mode: "keep" });
@@ -130,4 +129,47 @@ test("a failed background move shows the error and keeps the folder", async (t) 
   const failed = await waitForActivity(service, (entry) => entry.kind === "add-folder" && entry.status === "error");
   assert.match(failed.message, /already exists/);
   assert.ok(await exists(path.join(folder, "Game.exe")));
+});
+
+test("no game folder is created until a move is confirmed", async (t) => {
+  const { service, game, dirs, makeFolder } = await setup(t);
+  const gameRoot = path.join(dirs.installRoot, "Example Game");
+  assert.equal(await exists(gameRoot), false, "adding a game must not create its install folder");
+  await service.refreshGame(game.id);
+  await service.refreshAllGames();
+  assert.equal(await exists(gameRoot), false, "refreshing must not create it either");
+
+  const kept = await makeFolder("Kept Here");
+  await service.addExistingFolder({ folderPath: kept, gameId: game.id, mode: "keep" });
+  assert.equal(await exists(gameRoot), false, "adding a folder in place must not create it");
+
+  const moved = await makeFolder("Moved Over");
+  await service.addExistingFolder({ folderPath: moved, gameId: game.id, mode: "move" });
+  assert.ok(await exists(path.join(gameRoot, "Moved Over", "Game.exe")), "confirmed move creates the folder");
+});
+
+test("a folder that already sits in the install root is moved into the game's subfolder", async (t) => {
+  const { service, game, dirs } = await setup(t);
+  const loose = path.join(dirs.installRoot, "loose_game-1.0-pc");
+  await fs.mkdir(path.join(loose, "game"), { recursive: true });
+  await fs.writeFile(path.join(loose, "Game.exe"), "exe");
+
+  const updated = await service.addExistingFolder({ folderPath: loose, gameId: game.id, mode: "move" });
+  const expected = path.join(dirs.installRoot, "Example Game", "loose_game-1.0-pc");
+  assert.equal(await exists(loose), false);
+  assert.ok(await exists(path.join(expected, "Game.exe")));
+  assert.deepEqual(updated.folders.map((entry) => entry.folderPath), [expected]);
+});
+
+test("a folder already inside the game's folder is simply added; the game's own folder is refused", async (t) => {
+  const { service, game, dirs } = await setup(t);
+  const gameRoot = path.join(dirs.installRoot, "Example Game");
+  const inside = path.join(gameRoot, "Version 1");
+  await fs.mkdir(inside, { recursive: true });
+  await fs.writeFile(path.join(inside, "Game.exe"), "exe");
+
+  await assert.rejects(() => service.validateExistingFolder(gameRoot, "move", game), /install folder of "Example Game" itself/);
+  const updated = await service.addExistingFolder({ folderPath: inside, gameId: game.id, mode: "move" });
+  assert.ok(await exists(path.join(inside, "Game.exe")), "nothing was moved");
+  assert.deepEqual(updated.folders.map((entry) => entry.folderPath), [inside]);
 });
