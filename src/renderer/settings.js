@@ -31,17 +31,17 @@ function renderAuth() {
 async function handleSettingsSubmit(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  $("#settings-status").textContent = "saving";
+  $("#settings-status").textContent = "Saving…";
   try {
     await window.f95App.updateSettings({
       watchFolder: form.watchFolder.value.trim(),
       installRoot: form.installRoot.value.trim(),
       syncIntervalMinutes: Number(form.syncIntervalMinutes.value || 30)
     });
-    $("#settings-status").textContent = "saved";
+    $("#settings-status").textContent = "Saved";
     await reloadState();
   } catch (error) {
-    $("#settings-status").textContent = "error";
+    $("#settings-status").textContent = "Failed – see the message";
     alert(error.message);
   }
 }
@@ -70,12 +70,12 @@ async function handleBrowseFolderClick(event) {
 }
 
 async function handleExportData() {
-  $("#settings-status").textContent = "exporting";
+  $("#settings-status").textContent = "Exporting…";
   try {
     const result = await window.f95App.exportData();
-    $("#settings-status").textContent = result?.canceled ? "ready" : "exported";
+    $("#settings-status").textContent = result?.canceled ? "" : "Exported";
   } catch (error) {
-    $("#settings-status").textContent = "error";
+    $("#settings-status").textContent = "Failed – see the message";
     alert(error.message);
   }
 }
@@ -86,17 +86,17 @@ async function handleImportData() {
     return;
   }
 
-  $("#settings-status").textContent = "importing";
+  $("#settings-status").textContent = "Importing…";
   try {
     const result = await window.f95App.importData();
     if (result?.canceled) {
-      $("#settings-status").textContent = "ready";
+      $("#settings-status").textContent = "";
       return;
     }
-    $("#settings-status").textContent = "imported";
+    $("#settings-status").textContent = "Imported";
     await reloadState();
   } catch (error) {
-    $("#settings-status").textContent = "error";
+    $("#settings-status").textContent = "Failed – see the message";
     alert(error.message);
   }
 }

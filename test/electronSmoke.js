@@ -105,9 +105,9 @@ app.whenReady().then(async () => {
   assert.equal(await js("getComputedStyle(document.querySelector('#game-details-panel .developer-links')).display"), "none");
   await js("document.querySelector('#open-settings-panel').click(); handleExportData()");
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(await js("document.querySelector('#settings-status').textContent"), "exported");
+  assert.equal(await js("document.querySelector('#settings-status').textContent"), "Exported");
   await js("handleImportData()");
-  assert.equal(await js("document.querySelector('#settings-status').textContent"), "imported"); checks.push("export/import");
+  assert.equal(await js("document.querySelector('#settings-status').textContent"), "Imported"); checks.push("export/import");
   await js("window.f95App.openLogin().then(reloadState)");
   assert.equal(await js("state.auth.loggedIn"), true);
   await js("window.f95App.logout().then(reloadState)");

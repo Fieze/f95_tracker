@@ -2055,3 +2055,19 @@ body.has-overlay {
 .game-details-panel [data-section] {
   scroll-margin-top: 84px;
 }
+
+/* ---- Wording and help text ---- */
+.field-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* The settings status chip only exists while it has something to say. */
+.status-chip:empty {
+  display: none;
+}
+
+.overlay-panel-status-row:has(.status-chip:empty) {
+  display: none;
+}

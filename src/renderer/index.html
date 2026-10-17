@@ -18,21 +18,21 @@
             <img src="./assets/f95zone_thread_tracker_logo.svg" alt="F95 Zone Thread Tracker" />
           </a>
           <div class="topbar-stats" aria-label="Overview counters">
-            <article class="topbar-stat">
+            <article class="topbar-stat" title="Games in your library">
               <span>Games</span>
               <strong id="stat-games">0</strong>
             </article>
-            <article class="topbar-stat">
+            <article class="topbar-stat" title="Games whose thread has a newer version than the one you installed">
               <span>Pending Updates</span>
               <strong id="stat-updates">0</strong>
             </article>
-            <article class="topbar-stat">
+            <article class="topbar-stat" title="Downloaded archives waiting to be matched to a game or extracted">
               <span>Open Archives</span>
               <strong id="stat-jobs">0</strong>
             </article>
           </div>
           <div class="topbar-actions">
-            <button id="refresh-all" class="secondary" type="button">Refresh All</button>
+            <button id="refresh-all" class="secondary" type="button" title="Check every tracked thread for updates">Refresh All</button>
             <button id="open-add-thread-panel" class="icon-button" type="button" aria-label="Add thread" title="Add Thread">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" />
@@ -120,7 +120,7 @@
         <button class="overlay-close" type="button" data-close-overlay aria-label="Close settings">Close</button>
       </div>
       <div class="overlay-panel-status-row">
-        <span id="settings-status" class="status-chip muted">ready</span>
+        <span id="settings-status" class="status-chip muted" role="status"></span>
       </div>
       <form id="settings-form" class="overlay-form">
         <label>
@@ -131,6 +131,7 @@
               Browse
             </button>
           </div>
+          <small class="field-hint">Downloads land here and archives you drop in are detected automatically.</small>
         </label>
         <label>
           Install Root
@@ -140,10 +141,12 @@
               Browse
             </button>
           </div>
+          <small class="field-hint">Games are extracted into one subfolder per game inside this folder.</small>
         </label>
         <label>
           Sync Interval (Minutes)
           <input name="syncIntervalMinutes" type="number" min="5" step="5" />
+          <small class="field-hint">How often tracked threads are checked for updates (at least 5 minutes).</small>
         </label>
         <div class="settings-data-actions">
           <button id="export-data" class="secondary" type="button">Export Data</button>
@@ -157,7 +160,7 @@
       <div class="overlay-panel-header">
         <div>
           <p class="overlay-eyebrow">Account</p>
-          <h3 id="login-panel-title">f95zone Login</h3>
+          <h3 id="login-panel-title">F95Zone Login</h3>
         </div>
         <button class="overlay-close" type="button" data-close-overlay aria-label="Close login">Close</button>
       </div>
