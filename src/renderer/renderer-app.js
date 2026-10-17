@@ -138,9 +138,21 @@ function renderOverlays() {
 }
 
 function renderChromeVisibility() {
-  const hideChrome = state.openOverlay === "game-details" || state.openOverlay === "edit-folder";
-  $("#archive-queue-bar")?.classList.toggle("is-hidden-for-overlay", hideChrome);
-  $(".topbar")?.classList.toggle("is-hidden-for-overlay", hideChrome);
+  const hideTopbar = state.openOverlay === "game-details" || state.openOverlay === "edit-folder";
+  // Dialogs are modal: the download/archive bar must not sit on top of them, and the page behind must not scroll.
+  $("#archive-queue-bar")?.classList.toggle("is-hidden-for-overlay", Boolean(state.openOverlay));
+  $(".topbar")?.classList.toggle("is-hidden-for-overlay", hideTopbar);
+  document.body.classList.toggle("has-overlay", Boolean(state.openOverlay));
+  document.body.classList.toggle("topbar-hidden", hideTopbar);
+  syncTopbarHeight();
+}
+
+// Panels anchor below the real topbar height, which changes with window width and fonts.
+function syncTopbarHeight() {
+  const topbar = $(".topbar");
+  if (!topbar) return;
+  const height = Math.ceil(topbar.getBoundingClientRect().height);
+  if (height > 0) document.documentElement.style.setProperty("--topbar-height", `${height}px`);
 }
 
 function renderStats() {
@@ -230,6 +242,8 @@ function scheduleReloadState(minIntervalMs = LIVE_STATE_RELOAD_INTERVAL_MS) {
 
 async function initialize() {
   initLibraryToolbar();
+  syncTopbarHeight();
+  window.addEventListener("resize", syncTopbarHeight);
   initAddFolderPanel();
   $("#settings-form").addEventListener("submit", handleSettingsSubmit);
   document.querySelectorAll(".browse-folder-button").forEach((button) => {

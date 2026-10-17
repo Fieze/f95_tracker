@@ -42,7 +42,7 @@ function createTray() {
       },
       { type: "separator" },
       {
-        label: "Beenden",
+        label: "Quit",
         click: async () => {
           ctx.isQuitting = true;
           await ctx.logger?.info("Quit requested from ctx.tray.");
@@ -58,10 +58,10 @@ function createTray() {
 }
 
 function buildUpdateNotificationBody(payload) {
-  const title = payload?.title || "Ein beobachtetes Spiel";
-  const currentVersion = payload?.currentVersion ? `v${payload.currentVersion}` : "eine neue Version";
-  const installedVersion = payload?.installedVersion ? `Installiert: v${payload.installedVersion}` : "Noch nicht installiert";
-  return `${title}: ${currentVersion} verfuegbar. ${installedVersion}`;
+  const title = payload?.title || "A tracked game";
+  const currentVersion = payload?.currentVersion ? `v${payload.currentVersion}` : "a new version";
+  const installedVersion = payload?.installedVersion ? `Installed: v${payload.installedVersion}` : "Not installed yet";
+  return `${title}: ${currentVersion} is available. ${installedVersion}`;
 }
 
 function showGameUpdateNotification(payload) {
@@ -71,7 +71,7 @@ function showGameUpdateNotification(payload) {
   }
 
   const notification = new Notification({
-    title: "Update gefunden",
+    title: "Update available",
     body: buildUpdateNotificationBody(payload),
     icon: appIconPath,
     silent: false

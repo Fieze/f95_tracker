@@ -35,7 +35,9 @@ function buildStatusItems() {
     items.push({ kind: "running", text: `${queued} archive${queued === 1 ? "" : "s"} waiting for extraction` });
   }
 
-  return items;
+  // Failures first, then running work, then finished entries.
+  const order = { error: 0, running: 1, done: 2 };
+  return items.sort((left, right) => order[left.kind] - order[right.kind]);
 }
 
 function renderStatusLine() {
@@ -50,7 +52,9 @@ function renderStatusLine() {
     return;
   }
 
-  for (const item of items) {
+  const MAX_VISIBLE = 3;
+  const hidden = items.slice(MAX_VISIBLE);
+  for (const item of items.slice(0, MAX_VISIBLE)) {
     const node = createNode("span", `status-item status-${item.kind}`);
     node.appendChild(createNode("span", "status-dot"));
     node.appendChild(createNode("span", "status-text", item.text));
@@ -66,5 +70,10 @@ function renderStatusLine() {
       node.appendChild(dismiss);
     }
     container.appendChild(node);
+  }
+  if (hidden.length > 0) {
+    const more = createNode("span", "status-item status-more", `+${hidden.length} more`);
+    more.title = hidden.map((item) => item.text).join("\n");
+    container.appendChild(more);
   }
 }

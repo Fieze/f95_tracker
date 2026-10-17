@@ -1836,3 +1836,69 @@ button:hover,
 #add-folder-url-label.hidden {
   display: none;
 }
+
+/* ---- Layout and design fixes from the UI audit ---- */
+:root {
+  color-scheme: dark;
+  scrollbar-color: rgba(171, 204, 191, 0.32) transparent;
+  scrollbar-gutter: stable;
+  --topbar-height: 118px;
+  --panel-gap: 16px;
+  --panel-top: calc(var(--topbar-offset) + var(--topbar-height) + var(--panel-gap));
+  --panel-bottom-space: calc(var(--status-line-height) + var(--panel-gap));
+  --panel-max-height: calc(100vh - var(--panel-top) - var(--panel-bottom-space));
+}
+
+body.topbar-hidden {
+  --panel-top: var(--panel-gap);
+}
+
+body.has-overlay {
+  overflow: hidden;
+}
+
+.overlay-panel {
+  top: var(--panel-top);
+  max-height: var(--panel-max-height);
+}
+
+.overlay-panel-centered,
+.game-details-panel {
+  top: calc(var(--panel-top) + var(--panel-max-height) / 2);
+  max-height: var(--panel-max-height);
+}
+
+.game-details-panel {
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+
+.status-chip {
+  white-space: nowrap;
+}
+
+.game-details-panel .overlay-panel-subtitle {
+  max-width: none;
+}
+
+/* Detail facts flow into as many columns as fit instead of one tall column. */
+.version-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.status-dismiss {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.link-button {
+  padding: 4px 2px;
+  min-height: 24px;
+}
+
+.status-more {
+  flex: none;
+  color: var(--muted);
+  cursor: help;
+}

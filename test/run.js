@@ -19,3 +19,4 @@ require("./robustness.test");
 require("./libraryFilters.test");
 require("./scraping.test");
 require("./existingFolder.test");
+require("./language.test");

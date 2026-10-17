@@ -29,7 +29,7 @@ function startAutoUpdate() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("update-downloaded", (info) => {
-    notify("Update bereit", `Version ${info.version} wird beim Beenden der App installiert.`);
+    notify("Update ready", `Version ${info.version} will be installed when you quit the app.`);
   });
   const check = () => autoUpdater.checkForUpdates().catch((error) => ctx.logger?.warn("Update check failed.", { message: error.message }));
   void check();
