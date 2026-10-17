@@ -108,11 +108,27 @@ class Logger {
 
   async pruneRotatedFiles() {
     const rotatedFiles = await this.listRotatedFiles();
+    // Sort by the timestamp (and collision index) in the file name: rotated files written within the same
+    // millisecond can share an mtime, which made the newest-first order arbitrary.
     const staleFiles = rotatedFiles
-      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .sort((left, right) => this.compareRotatedFilesNewestFirst(left, right))
       .slice(this.maxRotatedFiles);
 
     await Promise.all(staleFiles.map((entry) => fs.rm(entry.fullPath, { force: true }).catch(() => {})));
+  }
+
+  compareRotatedFilesNewestFirst(left, right) {
+    const parsedPath = path.parse(this.filePath);
+    const key = (entry) => {
+      const stem = path.parse(entry.fullPath).name.slice(parsedPath.name.length + 1);
+      const match = stem.match(/^(.*Z)(?:-(\d+))?$/);
+      return { timestamp: match ? match[1] : stem, index: match?.[2] ? Number(match[2]) : 0 };
+    };
+    const a = key(left);
+    const b = key(right);
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? 1 : -1;
+    if (a.index !== b.index) return b.index - a.index;
+    return right.mtimeMs - left.mtimeMs;
   }
 
   async listRotatedFiles() {
