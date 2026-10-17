@@ -694,9 +694,11 @@ async function handleAddThread(event) {
   event.preventDefault();
   const form = event.currentTarget;
   try {
-    await window.f95App.addThread(form.threadUrl.value.trim());
+    // The address is validated right away; the import itself runs in the background and reports in the status line.
+    const result = await window.f95App.addThread(form.threadUrl.value.trim());
     form.reset();
     state.openOverlay = null;
+    if (result?.duplicate) alert("This thread is already being imported.");
     await reloadState();
   } catch (error) {
     alert(error.message);

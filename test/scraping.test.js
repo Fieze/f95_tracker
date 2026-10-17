@@ -195,3 +195,85 @@ test("user actions may show the browser check window, background refreshes never
   await service.refreshAllGames();
   assert.deepEqual(seen, [true, true, false]);
 });
+
+const waitFor = async (predicate, label) => {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+};
+
+test("images are fetched without request pacing, pages are paced", async () => {
+  const sleeps = [];
+  let time = 0;
+  const fetcher = new ThreadFetcher(
+    { cookies: { get: async () => [] }, fetch: async () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }) },
+    { minIntervalMs: 1500, jitterMs: 0, now: () => time, sleep: async (ms) => { sleeps.push(ms); time += ms; } }
+  );
+  for (let index = 0; index < 5; index += 1) await fetcher.fetchBinary(`https://attachments.f95zone.to/${index}.png`);
+  assert.deepEqual(sleeps, [], "image downloads must not wait for the page pacing");
+});
+
+test("adding a thread in the background returns at once and reports through activities", async (t) => {
+  const html = await fixture("renpy-logged-in");
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const service = await createService(t, { sessionFetch: async () => { await gate; return htmlResponse(html); } });
+
+  const started = service.addThreadInBackground(threadUrl);
+  assert.equal(started.queued, true);
+  assert.equal(service.addThreadInBackground(threadUrl).duplicate, true, "the same thread is not queued twice");
+  assert.throws(() => service.addThreadInBackground("not a url"), /thread/i);
+
+  let state = await service.getState();
+  assert.equal(state.games.length, 0);
+  assert.deepEqual(state.activities.map((entry) => [entry.kind, entry.status]), [["add-thread", "running"]]);
+  assert.match(state.activities[0].label, /example game/i);
+
+  release();
+  await waitFor(async () => (await service.getState()).games.length === 1, "the import to finish");
+  state = await service.getState();
+  assert.equal(state.activities[0].status, "done");
+  assert.match(state.activities[0].message, /Added Example Game/);
+  service.dismissActivity(state.activities[0].id);
+  assert.equal((await service.getState()).activities.length, 0);
+});
+
+test("a failed background import stays visible until it is dismissed", async (t) => {
+  const service = await createService(t, { sessionFetch: async () => new Response("nope", { status: 404 }) });
+  service.addThreadInBackground(threadUrl);
+  await waitFor(async () => (await service.getState()).activities[0]?.status === "error", "the failure");
+  const [failure] = (await service.getState()).activities;
+  assert.match(failure.message, /status 404/);
+  assert.equal(service.dismissActivity(failure.id), true);
+  assert.deepEqual((await service.getState()).activities, []);
+  // The address is free again afterwards.
+  assert.equal(service.addThreadInBackground(threadUrl).queued, true);
+  await waitFor(async () => (await service.getState()).activities.some((entry) => entry.status === "error"), "second failure");
+});
+
+test("refreshing all games reports progress and ends with a summary or the browser check", async (t) => {
+  const html = await fixture("renpy-logged-in");
+  let blocked = false;
+  const progress = [];
+  const service = await createService(t, {
+    sessionFetch: async () => (blocked ? challengeResponse() : htmlResponse(html))
+  });
+  await service.addThread("https://f95zone.to/threads/example-game.1/");
+  await service.addThread("https://f95zone.to/threads/example-two.2/");
+  service.onStateChanged = () => {};
+  const originalEmit = service.emitChange.bind(service);
+  service.emitChange = () => { const entry = service.activities.find((a) => a.kind === "refresh-all"); if (entry?.progress) progress.push(`${entry.progress.done}/${entry.progress.total}`); originalEmit(); };
+
+  await service.refreshAllGames();
+  assert.ok(progress.includes("0/2") && progress.includes("1/2"), `progress was ${progress.join(",")}`);
+  let [summary] = (await service.getState()).activities.filter((a) => a.kind === "refresh-all");
+  assert.equal(summary.status, "done");
+  assert.equal(summary.message, "2 games up to date");
+
+  blocked = true;
+  await service.refreshAllGames();
+  [summary] = (await service.getState()).activities.filter((a) => a.kind === "refresh-all" && a.status === "error");
+  assert.match(summary.message, /browser check/i);
+});

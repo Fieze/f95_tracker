@@ -77,8 +77,10 @@ class ThreadFetcher {
     return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
   }
 
-  request(url) {
-    return this.schedule(() => this.performRequest(url));
+  // Pages are paced and serialised; static assets (images) are not, they come from a different host and
+  // pacing them made adding a thread with a dozen screenshots take half a minute.
+  request(url, { paced = false } = {}) {
+    return paced ? this.schedule(() => this.performRequest(url)) : this.performRequest(url);
   }
 
   async performRequest(url) {
@@ -95,11 +97,11 @@ class ThreadFetcher {
     return fetch(url, { ...init, headers });
   }
 
-  async assertOk(response, label) {
+  async assertOk(response, label, { pausePages = true } = {}) {
     if (response.ok) return;
     const body = [403, 429, 503].includes(response.status) ? await response.text().catch(() => "") : "";
     if (isChallengeResponse(response, body)) {
-      this.blockedUntil = this.now() + this.cooldownMs;
+      if (pausePages) this.blockedUntil = this.now() + this.cooldownMs;
       throw new CloudflareChallengeError();
     }
     throw new Error(`${label} request failed with status ${response.status}`);
@@ -120,7 +122,7 @@ class ThreadFetcher {
   async fetchUrl(url, options = {}) {
     const normalizedUrl = /^https?:/i.test(url) ? url : normalizeThreadUrl(url);
     if (this.pageLoader) return this.loadPage(normalizedUrl, options);
-    const response = await this.request(normalizedUrl);
+    const response = await this.request(normalizedUrl, { paced: true });
     await this.assertOk(response, "Thread");
 
     const html = await response.text();
@@ -143,7 +145,7 @@ class ThreadFetcher {
     }
 
     const response = await this.request(normalizedUrl);
-    await this.assertOk(response, "Asset");
+    await this.assertOk(response, "Asset", { pausePages: false });
 
     const buffer = Buffer.from(await response.arrayBuffer());
     return {

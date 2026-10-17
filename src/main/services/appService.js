@@ -16,6 +16,9 @@ const { normalizeThreadUrl } = require("./utils");
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
+const ASSET_DOWNLOAD_CONCURRENCY = 4;
+const FINISHED_ACTIVITY_VISIBLE_MS = 4000;
+
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess, fetcherOptions }) {
     this.onStateChanged = onStateChanged;
@@ -68,6 +71,11 @@ class AppService {
     this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
     this.sessionSeenLoggedIn = null;
+    this.activities = [];
+    this.nextActivityId = 1;
+    this.activityTimers = new Map();
+    this.pendingThreadUrls = new Set();
+    this.addThreadQueue = Promise.resolve();
     this.fetcher = new ThreadFetcher(authSession, fetcherOptions);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
     this.extractArchiveWithProgress = extractArchiveWithProgress;
@@ -110,6 +118,7 @@ class AppService {
     return {
       settings: this.db.getSettings(),
       auth: await this.getAuthState(),
+      activities: this.activities.map((activity) => ({ ...activity, progress: activity.progress && { ...activity.progress } })),
       games: this.db.getGames(),
       archiveJobs: this.db.listArchiveJobs(),
       currentExtraction: this.currentExtraction,
@@ -248,6 +257,72 @@ class AppService {
     return this.startupRefreshPromise;
   }
 
+  // ---- Background activities, shown in the status line ----
+
+  startActivity(kind, label, { total = 0 } = {}) {
+    const id = this.nextActivityId++;
+    this.activities.push({
+      id, kind, label, status: "running", message: "", startedAt: new Date().toISOString(),
+      progress: total ? { done: 0, total } : null
+    });
+    this.emitChange();
+    return id;
+  }
+
+  updateActivity(id, patch) {
+    const activity = this.activities.find((entry) => entry.id === id);
+    if (!activity) return;
+    Object.assign(activity, patch);
+    if (patch.progress) activity.progress = { ...patch.progress };
+    this.emitChange();
+  }
+
+  // Successful activities disappear after a moment; failed ones stay until the user dismisses them.
+  finishActivity(id, { error = "", message = "" } = {}) {
+    const activity = this.activities.find((entry) => entry.id === id);
+    if (!activity) return;
+    activity.status = error ? "error" : "done";
+    activity.message = error || message;
+    this.emitChange();
+    if (!error) {
+      const timer = setTimeout(() => this.dismissActivity(id), FINISHED_ACTIVITY_VISIBLE_MS);
+      timer.unref?.();
+      this.activityTimers.set(id, timer);
+    }
+  }
+
+  dismissActivity(id) {
+    clearTimeout(this.activityTimers.get(id));
+    this.activityTimers.delete(id);
+    const before = this.activities.length;
+    this.activities = this.activities.filter((entry) => entry.id !== id || entry.status === "running");
+    if (this.activities.length !== before) this.emitChange();
+    return this.activities.length !== before;
+  }
+
+  // Validates the address right away, then imports the thread in the background; progress and errors show in the
+  // status line so the add dialog can close immediately.
+  addThreadInBackground(threadUrl) {
+    const normalizedUrl = normalizeThreadUrl(threadUrl);
+    if (this.pendingThreadUrls.has(normalizedUrl)) return { queued: false, duplicate: true };
+    this.pendingThreadUrls.add(normalizedUrl);
+    const slug = normalizedUrl.split("/threads/")[1]?.replace(/\.\d+\/?$/, "").replace(/-/g, " ") || normalizedUrl;
+    const activityId = this.startActivity("add-thread", `Adding ${slug}`);
+    const run = async () => {
+      try {
+        const game = await this.addThread(normalizedUrl);
+        this.finishActivity(activityId, { message: `Added ${game.title}` });
+      } catch (error) {
+        this.finishActivity(activityId, { error: error.message });
+        await this.logger.error("Background thread import failed.", { threadUrl: normalizedUrl, message: error.message });
+      } finally {
+        this.pendingThreadUrls.delete(normalizedUrl);
+      }
+    };
+    this.addThreadQueue = this.addThreadQueue.then(run, run);
+    return { queued: true, activityId };
+  }
+
   async addThread(threadUrl) {
     const normalizedUrl = normalizeThreadUrl(threadUrl);
     await this.logger.info("Adding thread.", { threadUrl: normalizedUrl });
@@ -271,6 +346,8 @@ class AppService {
       throw new Error("Game not found.");
     }
     await this.logger.info("Refreshing game.", { gameId: Number(gameId), title: game.title });
+    // A refresh of all games reports its own progress; single refreshes get their own entry.
+    const activityId = background ? null : this.startActivity("refresh", `Refreshing ${game.title}`);
     try {
       const parsed = await this.loadThread(game.threadUrl, {
         interactive: !background,
@@ -306,6 +383,8 @@ class AppService {
         message: error.message
       });
       throw error;
+    } finally {
+      if (activityId) this.finishActivity(activityId);
     }
   }
 
@@ -369,15 +448,21 @@ class AppService {
   async refreshAllGames() {
     await this.logger.info("Refreshing all games.");
     const games = this.db.getGames();
-    for (const game of games) {
+    const activityId = games.length ? this.startActivity("refresh-all", "Refreshing games", { total: games.length }) : null;
+    let failed = 0;
+    let stoppedByCheck = false;
+    for (const [index, game] of games.entries()) {
+      this.updateActivity(activityId, { label: `Refreshing ${game.title}`, progress: { done: index, total: games.length } });
       try {
         await this.refreshGame(game.id, { background: true });
       } catch (error) {
         if (error.challenge) {
           // Every further request would just hit the same browser check; stop and wait for the user.
           await this.logger.warn("Refresh stopped: F95Zone is asking for a browser check.", { message: error.message });
+          stoppedByCheck = true;
           break;
         }
+        failed += 1;
         await this.logger.warn("Background refresh skipped failed game.", {
           gameId: game.id,
           title: game.title,
@@ -387,6 +472,15 @@ class AppService {
       }
     }
     await this.logger.info("Finished refreshing all games.", { count: games.length });
+    if (activityId) {
+      if (stoppedByCheck) {
+        this.finishActivity(activityId, { error: "Refresh stopped: F95Zone wants a browser check. Open Login to complete it." });
+      } else if (failed) {
+        this.finishActivity(activityId, { error: `Refresh finished, but ${failed} game${failed === 1 ? "" : "s"} could not be updated (see log).` });
+      } else {
+        this.finishActivity(activityId, { message: `${games.length} games up to date` });
+      }
+    }
     return this.getState();
   }
 
@@ -395,13 +489,12 @@ class AppService {
     let bannerImage = null;
     const screenshotImages = [];
 
-    if (parsedThread.bannerImageUrl) {
-      try {
-        bannerImage = await this.resolveThreadAsset(parsedThread.bannerImageUrl, "banner", existingAssets?.bannerImage || null);
-      } catch (error) {
-        warnings.push(`Banner image could not be downloaded: ${error.message}`);
-      }
-    }
+    const bannerPromise = parsedThread.bannerImageUrl
+      ? this.resolveThreadAsset(parsedThread.bannerImageUrl, "banner", existingAssets?.bannerImage || null).catch((error) => {
+          warnings.push(`Banner image could not be downloaded: ${error.message}`);
+          return null;
+        })
+      : Promise.resolve(null);
 
     const existingScreenshots = new Map(
       (existingAssets?.screenshotImages || [])
@@ -409,15 +502,28 @@ class AppService {
         .map((asset) => [asset.sourceUrl, asset])
     );
 
-    for (const screenshotUrl of parsedThread.screenshotImageUrls || []) {
-      try {
-        screenshotImages.push(
-          await this.resolveThreadAsset(screenshotUrl, "screenshot", existingScreenshots.get(screenshotUrl) || null)
-        );
-      } catch (error) {
-        warnings.push(`Screenshot could not be downloaded: ${error.message}`);
+    // A few downloads at a time; results keep the order of the thread.
+    const screenshotUrls = parsedThread.screenshotImageUrls || [];
+    const screenshotResults = new Array(screenshotUrls.length);
+    let nextScreenshot = 0;
+    const worker = async () => {
+      while (nextScreenshot < screenshotUrls.length) {
+        const index = nextScreenshot++;
+        try {
+          screenshotResults[index] = await this.resolveThreadAsset(
+            screenshotUrls[index], "screenshot", existingScreenshots.get(screenshotUrls[index]) || null
+          );
+        } catch (error) {
+          screenshotResults[index] = { error: `Screenshot could not be downloaded: ${error.message}` };
+        }
       }
+    };
+    await Promise.all(Array.from({ length: Math.min(ASSET_DOWNLOAD_CONCURRENCY, screenshotUrls.length) }, worker));
+    for (const result of screenshotResults) {
+      if (result?.error) warnings.push(result.error);
+      else if (result) screenshotImages.push(result);
     }
+    bannerImage = await bannerPromise;
 
     return {
       ...parsedThread,
@@ -583,6 +689,8 @@ class AppService {
     this.gate.closed = true;
     this.archiveQueue.closed = true;
     this.scheduler.stop();
+    for (const timer of this.activityTimers.values()) clearTimeout(timer);
+    this.activityTimers.clear();
     this.stopManagedFolderMonitor();
     this.stopBackupScheduler();
     this.extractionAbort?.abort();

@@ -18,6 +18,7 @@ const state = {
   editingFolderId: null,
   openOverlay: null,
   archiveQueueReady: false,
+  activities: [],
   libraryView: { query: "", filter: "all", sort: "title" }
 };
 
@@ -158,6 +159,7 @@ function render() {
   renderGameDetailsPanel();
   renderEditFolderPanel();
   renderJobs();
+  renderStatusLine();
   renderOverlays();
 }
 

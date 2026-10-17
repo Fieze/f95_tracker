@@ -60,6 +60,18 @@ app.whenReady().then(async () => {
   const js = (code) => window.webContents.executeJavaScript(code);
   await js("window.confirm = () => true; window.alert = (message) => { throw new Error(message); }; reloadState()");
   assert.equal(await js("document.querySelectorAll('#games-list .game-tile').length"), 1); checks.push("library");
+  assert.equal(await js("document.querySelector('#status-line-items').textContent"), "Ready"); checks.push("status line idle");
+  await js(`state.activities = [
+    { id: 1, kind: "refresh-all", label: "Refreshing Example Game", status: "running", progress: { done: 3, total: 35 } },
+    { id: 2, kind: "add-thread", label: "Adding another game", status: "error", message: "Thread request failed with status 404" }
+  ]; renderStatusLine()`);
+  const statusText = await js("document.querySelector('#status-line-items').textContent");
+  assert.ok(statusText.includes("Refreshing Example Game (3/35)") && statusText.includes("status 404"), statusText);
+  assert.equal(await js("document.querySelector('#status-line').classList.contains('is-busy')"), true);
+  await js("document.querySelector('#game-details-panel').classList.add('hidden'); window.scrollTo(0, 0)");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await fs.writeFile(path.join(cache, "ui-status-line.png"), (await window.webContents.capturePage()).toPNG());
+  await js("state.activities = []; renderStatusLine()"); checks.push("status line activities");
   await js("document.querySelector('#games-list button').click()");
   assert.equal(await js("document.querySelector('#game-details-panel').classList.contains('hidden')"), false); checks.push("details");
   assert.equal(await js("document.querySelector('#game-details-panel .changelog').textContent"), "Fixture changelog");
