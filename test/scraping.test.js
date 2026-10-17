@@ -158,3 +158,40 @@ test("refreshing all games stops after the first browser check instead of retryi
   await service.refreshAllGames();
   assert.ok(requests > 1);
 });
+
+test("with a page loader, pages come from the loader and challenges still pause the fetcher", async () => {
+  let time = 0;
+  const calls = [];
+  const fetcher = new ThreadFetcher(
+    { cookies: { get: async () => [] }, fetch: async () => { throw new Error("session fetch must not be used for pages"); } },
+    { minIntervalMs: 0, jitterMs: 0, cooldownMs: 600000, now: () => time }
+  );
+  fetcher.setPageLoader(async (url, options) => {
+    calls.push({ url, options });
+    if (calls.length === 2) throw new CloudflareChallengeError();
+    return { url: `${url}final`, html: "<html data-logged-in=\"true\"></html>", status: 200 };
+  });
+
+  const page = await fetcher.fetchThread(threadUrl, { interactive: true });
+  assert.equal(page.status, 200);
+  assert.ok(page.url.endsWith("final"));
+  assert.deepEqual(calls[0].options, { interactive: true });
+
+  await assert.rejects(() => fetcher.fetchThread(threadUrl), (error) => error.challenge);
+  await assert.rejects(() => fetcher.fetchThread(threadUrl), /paused/);
+  assert.equal(calls.length, 2, "paused fetcher must not call the loader");
+  time += 600001;
+  assert.ok((await fetcher.fetchThread(threadUrl)).html);
+});
+
+test("user actions may show the browser check window, background refreshes never do", async (t) => {
+  const html = await fixture("renpy-logged-in");
+  const service = await createService(t, { sessionFetch: async () => htmlResponse(html) });
+  const seen = [];
+  service.fetcher.setPageLoader(async (url, options) => { seen.push(options.interactive); return { url, status: 200, html }; });
+
+  const game = await service.addThread(threadUrl);
+  await service.refreshGame(game.id);
+  await service.refreshAllGames();
+  assert.deepEqual(seen, [true, true, false]);
+});

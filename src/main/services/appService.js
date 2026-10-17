@@ -159,7 +159,7 @@ class AppService {
   // Scrapes the thread page with the app's F95Zone session. Guests can read metadata; only download links
   // and some tags need a login.
   async loadThread(url, details = {}) {
-    const thread = await this.fetcher.fetchThread(url);
+    const thread = await this.fetcher.fetchThread(url, { interactive: details.interactive !== false });
     this.noteLoggedInFromHtml(thread.html);
     return this.parseThreadWithLogging(thread.html, thread.url, details);
   }
@@ -264,7 +264,7 @@ class AppService {
     return this.db.getGameById(game.id);
   }
 
-  async refreshGame(gameId) {
+  async refreshGame(gameId, { background = false } = {}) {
     const game = this.db.getGameById(gameId);
     const refreshMetadata = this.db.getGameRefreshMetadata(gameId);
     if (!game) {
@@ -273,6 +273,7 @@ class AppService {
     await this.logger.info("Refreshing game.", { gameId: Number(gameId), title: game.title });
     try {
       const parsed = await this.loadThread(game.threadUrl, {
+        interactive: !background,
         action: "refresh_game",
         gameId: game.id,
         title: game.title
@@ -370,7 +371,7 @@ class AppService {
     const games = this.db.getGames();
     for (const game of games) {
       try {
-        await this.refreshGame(game.id);
+        await this.refreshGame(game.id, { background: true });
       } catch (error) {
         if (error.challenge) {
           // Every further request would just hit the same browser check; stop and wait for the user.

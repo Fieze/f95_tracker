@@ -105,8 +105,21 @@ class ThreadFetcher {
     throw new Error(`${label} request failed with status ${response.status}`);
   }
 
-  async fetchUrl(url) {
+  // Pages can be read through a real browser window instead of fetch (see browserPageLoader.js).
+  setPageLoader(loader) { this.pageLoader = loader; }
+
+  async loadPage(url, options) {
+    const page = await this.schedule(() =>
+      this.pageLoader(url, options).catch((error) => {
+        if (error.challenge) this.blockedUntil = this.now() + this.cooldownMs;
+        throw error;
+      }));
+    return { requestedUrl: url, status: 200, ...page, url: page.url || url };
+  }
+
+  async fetchUrl(url, options = {}) {
     const normalizedUrl = /^https?:/i.test(url) ? url : normalizeThreadUrl(url);
+    if (this.pageLoader) return this.loadPage(normalizedUrl, options);
     const response = await this.request(normalizedUrl);
     await this.assertOk(response, "Thread");
 
@@ -119,8 +132,8 @@ class ThreadFetcher {
     };
   }
 
-  async fetchThread(url) {
-    return this.fetchUrl(normalizeThreadUrl(url));
+  async fetchThread(url, options = {}) {
+    return this.fetchUrl(normalizeThreadUrl(url), options);
   }
 
   async fetchBinary(url) {

@@ -17,6 +17,7 @@ const { restoreMainWindow, createTray, showGameUpdateNotification } = require(".
 const { hardenSession, createWindow } = require("./windows");
 const { attachDownloadSessionListeners } = require("./downloadWindow");
 const { bindIpc } = require("./ipc");
+const { createBrowserPageLoader } = require("./browserPageLoader");
 const { startAutoUpdate, stopAutoUpdate } = require("./updater");
 
 // Cloudflare ties its clearance cookie to the user agent. Version 1.0.3 briefly sent a modified one, which left
@@ -83,6 +84,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     }
   });
 
+  ctx.pageLoader = createBrowserPageLoader({ partition: AUTH_PARTITION, session: authSession, logger: ctx.logger });
+  ctx.appService.fetcher.setPageLoader((url, options) => ctx.pageLoader.load(url, options));
   await ctx.appService.initialize();
   bindIpc();
   createTray();
@@ -128,6 +131,7 @@ app.on("before-quit", (event) => {
   shutdownPromise = (async () => {
     stopAutoUpdate();
     await ctx.logger?.info("Application shutting down.");
+    ctx.pageLoader?.dispose();
     await ctx.appService.dispose();
     await Promise.all([ctx.logger, ctx.downloadLogger, ctx.extractionLogger, ctx.parsingLogger].map((entry) => entry?.state.writeQueue));
     shutdownComplete = true;

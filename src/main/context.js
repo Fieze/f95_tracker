@@ -14,6 +14,7 @@ const ctx = {
   extractionLogger: null,
   parsingLogger: null,
   tray: null,
+  pageLoader: null,
   isQuitting: false
 };
 

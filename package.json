@@ -9,7 +9,8 @@
     "test": "node test/run.js",
     "test:ui": "electron test/electronSmoke.js",
     "build": "electron-builder --win --publish never",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:loader": "electron test/electronLoader.js"
   },
   "keywords": [
     "electron",
