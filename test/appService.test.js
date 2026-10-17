@@ -1099,3 +1099,75 @@ test("extractJob marks invalid archives as failed instead of throwing through IP
   assert.match(failedJob.errorText, /cannot open the file as archive/i);
   assert.equal(service.currentExtraction, null);
 });
+
+function interruptedResponse(firstChunk, headers) {
+  let sent = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (!sent) {
+        sent = true;
+        controller.enqueue(new TextEncoder().encode(firstChunk));
+      } else {
+        controller.error(new Error("connection reset"));
+      }
+    }
+  });
+  return new Response(body, { headers });
+}
+
+async function setupDownload(t, downloadFetch) {
+  const { service, userDataPath } = await createService({ downloadFetch });
+  await service.updateSettings({
+    watchFolder: path.join(userDataPath, "watch"),
+    installRoot: path.join(userDataPath, "installs"),
+    syncIntervalMinutes: 30
+  });
+  t.after(async () => {
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true });
+  });
+  const job = service.createDownloadJob({ url: "https://download.example/archive", label: "Archive" });
+  return { service, job };
+}
+
+test("startResolvedDownload resumes an interrupted download with a Range request", async (t) => {
+  const requests = [];
+  const { service, job } = await setupDownload(t, async (_url, init) => {
+    requests.push(init.headers.range || null);
+    if (!init.headers.range) {
+      return interruptedResponse("download ", { "content-length": "16", "content-disposition": 'attachment; filename="resume.zip"' });
+    }
+    return new Response("payload", { status: 206, headers: { "content-length": "7" } });
+  });
+
+  const completed = await service.startResolvedDownload(job.id, { url: "https://download.example/archive" });
+  assert.equal(completed.status, "completed");
+  assert.deepEqual(requests, [null, "bytes=9-"]);
+  assert.equal(await fs.readFile(completed.targetPath, "utf8"), "download payload");
+  assert.equal(completed.sha256, require("crypto").createHash("sha256").update("download payload").digest("hex"));
+  await assert.rejects(() => fs.access(`${completed.targetPath}.part`));
+});
+
+test("startResolvedDownload fails and cleans up when the server ignores Range", async (t) => {
+  const { service, job } = await setupDownload(t, async (_url, init) => {
+    if (!init.headers.range) {
+      return interruptedResponse("download ", { "content-length": "16", "content-disposition": 'attachment; filename="norange.zip"' });
+    }
+    return new Response("download payload", { status: 200 });
+  });
+
+  await assert.rejects(() => service.startResolvedDownload(job.id, { url: "https://download.example/archive" }), /connection reset/);
+  const failed = service.getDownloadJob(job.id);
+  assert.equal(failed.status, "failed");
+  await assert.rejects(() => fs.access(`${failed.targetPath}.part`));
+});
+
+test("startResolvedDownload rejects files shorter than the announced length", async (t) => {
+  const { service, job } = await setupDownload(t, async () =>
+    new Response("short", { headers: { "content-length": "16", "content-disposition": 'attachment; filename="short.zip"' } }));
+
+  await assert.rejects(() => service.startResolvedDownload(job.id, { url: "https://download.example/archive" }), /incomplete/);
+  const failed = service.getDownloadJob(job.id);
+  assert.equal(failed.status, "failed");
+  await assert.rejects(() => fs.access(failed.targetPath));
+});

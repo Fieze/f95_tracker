@@ -735,6 +735,7 @@ const delegatedMethods = {
     "startResolvedDownload",
     "buildResolvedDownloadHeaders",
     "streamResponseToFile",
+    "downloadWithResume",
     "resolveDownloadFileName",
     "sanitizeDownloadFileName",
     "extractFileNameFromContentDisposition",

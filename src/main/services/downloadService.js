@@ -1,6 +1,9 @@
 const fs = require("fs/promises");
 const path = require("path");
+const crypto = require("crypto");
 const DOWNLOAD_PROGRESS_EMIT_INTERVAL_MS = 250;
+const MAX_RESUME_ATTEMPTS = 3;
+const RESUME_BACKOFF_MS = 1000;
 const DOWNLOADABLE_FILE_EXTENSIONS = new Set([".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".exe", ".apk"]);
 
 // Shared application state and facade calls are supplied by AppService.
@@ -199,11 +202,17 @@ class DownloadService {
         completedAt: ""
       });
 
-      await this.app.streamResponseToFile(response, tempPath, {
+      const { bytesReceived, sha256 } = await this.downloadWithResume(response, tempPath, {
         jobId: job.id,
         bytesTotal,
-        signal: controller.signal
+        signal: controller.signal,
+        url: String(options.url || job.sourceUrl || "").trim(),
+        headers: this.app.buildResolvedDownloadHeaders(options)
       });
+      if (bytesTotal && bytesReceived !== bytesTotal) {
+        await fs.unlink(tempPath).catch(() => {});
+        throw new Error(`Download is incomplete: received ${bytesReceived} of ${bytesTotal} bytes.`);
+      }
 
       await fs.rename(tempPath, targetPath);
       this.app.activeDownloadControllers.delete(job.id);
@@ -216,6 +225,7 @@ class DownloadService {
         bytesTotal: bytesTotal || this.app.getDownloadJob(job.id)?.bytesReceived || 0,
         speedBytesPerSecond: this.app.getDownloadJob(job.id)?.speedBytesPerSecond || 0,
         completedAt: new Date().toISOString(),
+        sha256,
         errorMessage: ""
       });
 
@@ -223,7 +233,8 @@ class DownloadService {
         jobId: job.id,
         sourceUrl: job.sourceUrl,
         resolvedUrl,
-        targetPath
+        targetPath,
+        sha256
       });
 
       if (job.gameId) {
@@ -269,9 +280,47 @@ class DownloadService {
     return headers;
   }
 
-  async streamResponseToFile(response, filePath, { jobId, bytesTotal = 0, signal } = {}) {
-    const fileHandle = await fs.open(filePath, "wx");
-    let bytesReceived = 0;
+  // Streams the response and, when the connection drops mid-file, resumes with a Range request
+  // (up to MAX_RESUME_ATTEMPTS times) as long as the server honours it with a 206 response.
+  async downloadWithResume(response, tempPath, { jobId, bytesTotal, signal, url, headers }) {
+    const hash = crypto.createHash("sha256");
+    let received = 0;
+    let current = response;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const result = await this.app.streamResponseToFile(current, tempPath, {
+          jobId, bytesTotal, signal, offset: received, hash, keepPartial: true
+        });
+        received = result?.bytesReceived ?? received;
+        return { bytesReceived: received, sha256: hash.digest("hex") };
+      } catch (error) {
+        received = error.bytesReceived ?? received;
+        const canResume = error?.name !== "AbortError" && !signal?.aborted && bytesTotal > 0 &&
+          received > 0 && received < bytesTotal && attempt < MAX_RESUME_ATTEMPTS;
+        if (!canResume) {
+          await fs.unlink(tempPath).catch(() => {});
+          throw error;
+        }
+        await this.app.downloadLogger?.warn("Download interrupted, trying to resume.", {
+          jobId, attempt: attempt + 1, bytesReceived: received, message: error.message
+        });
+        await new Promise((resolve) => setTimeout(resolve, RESUME_BACKOFF_MS * (attempt + 1)));
+        current = await this.app.downloadFetch(url, {
+          headers: { ...headers, range: `bytes=${received}-` },
+          redirect: "follow",
+          signal
+        });
+        if (current.status !== 206) {
+          await fs.unlink(tempPath).catch(() => {});
+          throw error;
+        }
+      }
+    }
+  }
+
+  async streamResponseToFile(response, filePath, { jobId, bytesTotal = 0, signal, offset = 0, hash, keepPartial = false } = {}) {
+    const fileHandle = await fs.open(filePath, offset > 0 ? "a" : "wx");
+    let bytesReceived = offset;
     let lastEmitAt = 0;
     let completed = false;
     const startedAt = Date.now();
@@ -285,14 +334,15 @@ class DownloadService {
           throw error;
         }
         await fileHandle.writeFile(buffer);
-        bytesReceived = buffer.length;
+        hash?.update(buffer);
+        bytesReceived = offset + buffer.length;
         this.app.updateDownloadJob(jobId, {
           bytesReceived,
-          bytesTotal: bytesTotal || buffer.length,
+          bytesTotal: bytesTotal || bytesReceived,
           speedBytesPerSecond: bytesReceived
         });
         completed = true;
-        return;
+        return { bytesReceived };
       }
 
       const reader = response.body.getReader();
@@ -311,6 +361,7 @@ class DownloadService {
 
         const chunk = Buffer.from(value);
         await fileHandle.write(chunk, 0, chunk.length);
+        hash?.update(chunk);
         bytesReceived += chunk.length;
 
         const now = Date.now();
@@ -320,7 +371,7 @@ class DownloadService {
           this.app.updateDownloadJob(jobId, {
             bytesReceived,
             bytesTotal: bytesTotal || 0,
-            speedBytesPerSecond: bytesReceived / elapsedSeconds
+            speedBytesPerSecond: (bytesReceived - offset) / elapsedSeconds
           });
         }
       }
@@ -329,11 +380,15 @@ class DownloadService {
       this.app.updateDownloadJob(jobId, {
         bytesReceived,
         bytesTotal: bytesTotal || bytesReceived,
-        speedBytesPerSecond: bytesReceived / elapsedSeconds
+        speedBytesPerSecond: (bytesReceived - offset) / elapsedSeconds
       });
+      return { bytesReceived };
+    } catch (error) {
+      error.bytesReceived = bytesReceived;
+      throw error;
     } finally {
       await fileHandle.close();
-      if (!completed) {
+      if (!completed && !keepPartial) {
         await fs.unlink(filePath).catch(() => {});
       }
     }
