@@ -196,7 +196,8 @@ app.whenReady().then(async () => {
   };
   const states = [
     { name: "library", setup: async () => idle(), apply: "state.openOverlay = null; state.selectedGameId = null" },
-    { name: "library-busy", setup: async () => busy(), apply: "state.openOverlay = null; state.selectedGameId = null" },
+    { name: "library-busy", setup: async () => busy(), apply: "state.openOverlay = null; state.selectedGameId = null; state.activityDrawerOpen = false" },
+    { name: "library-busy-drawer", setup: async () => busy(), apply: "state.openOverlay = null; state.selectedGameId = null; state.activityDrawerOpen = true" },
     { name: "settings", setup: async () => idle(), apply: "state.openOverlay = 'settings'" },
     { name: "settings-busy", setup: async () => busy(), apply: "state.openOverlay = 'settings'" },
     { name: "login", setup: async () => idle(), apply: "state.openOverlay = 'login'" },

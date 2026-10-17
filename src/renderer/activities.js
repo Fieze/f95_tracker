@@ -136,6 +136,10 @@ function getOpenArchiveJobs(jobs = state.archiveJobs) {
   return (jobs || []).filter((job) => ["needs-review", "queued", "processing", "unmatched"].includes(job.status));
 }
 
+function getAttentionArchiveCount(jobs = state.archiveJobs) {
+  return (jobs || []).filter((job) => ["needs-review", "unmatched"].includes(job.status)).length;
+}
+
 function getActiveDownloadCount(downloadJobs = state.downloadJobs) {
   return (downloadJobs || []).filter((job) =>
     ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
@@ -156,6 +160,10 @@ function updateArchiveQueueAutoExpand(previousJobs, nextJobs, previousDownloadJo
 
   if (nextCount > previousCount || nextActiveDownloads > previousActiveDownloads) {
     state.archiveQueueReady = true;
+  }
+  // Downloads and extractions report in the status line; the drawer only opens by itself when a decision is needed.
+  if (getAttentionArchiveCount(nextJobs || []) > getAttentionArchiveCount(previousJobs || [])) {
+    state.activityDrawerOpen = true;
   }
 }
 
@@ -275,6 +283,7 @@ function renderActiveDownloads() {
   const activeJobs = getActiveDownloadJobs();
   section.classList.toggle("hidden", activeJobs.length === 0);
   countNode.textContent = String(activeJobs.length);
+  $("#active-downloads-heading").textContent = activeJobs.length > 1 ? `Active Downloads (${activeJobs.length})` : "Active Downloads";
   list.innerHTML = "";
 
   activeJobs.forEach((job) => {
@@ -325,8 +334,7 @@ function renderActiveDownloads() {
 function renderArchiveQueueBar() {
   const bar = $("#archive-queue-bar");
   const summary = $("#archive-queue-summary");
-  const count = $("#archive-queue-count");
-  if (!bar || !summary || !count) {
+  if (!bar || !summary) {
     return;
   }
 
@@ -361,15 +369,27 @@ function renderArchiveQueueBar() {
         ? `${openCount} archive${openCount === 1 ? "" : "s"} need attention.`
         : "";
 
-  bar.classList.toggle("is-pending", !state.archiveQueueReady || !hasVisibleContent);
+  if (!hasVisibleContent) state.activityDrawerOpen = false;
+  bar.classList.toggle("is-pending", !state.archiveQueueReady || !hasVisibleContent || !state.activityDrawerOpen);
   bar.dataset.mode = mode;
   summary.textContent = summaryText;
-  count.textContent = String(openCount);
+
+  const toggle = $("#status-line-toggle");
+  const attention = getAttentionArchiveCount();
+  toggle.classList.toggle("hidden", !hasVisibleContent);
+  toggle.setAttribute("aria-expanded", state.activityDrawerOpen ? "true" : "false");
+  $("#status-toggle-badge").textContent = String(attention);
+  $("#status-toggle-badge").classList.toggle("hidden", attention === 0);
   syncArchiveBarReservedSpace();
   if (!archiveBarResizeObserver && typeof ResizeObserver !== "undefined") {
     archiveBarResizeObserver = new ResizeObserver(syncArchiveBarReservedSpace);
     archiveBarResizeObserver.observe(bar);
   }
+}
+
+function setActivityDrawerOpen(open) {
+  state.activityDrawerOpen = open;
+  renderArchiveQueueBar();
 }
 
 // The bar's height follows its content (capped, then it scrolls); content below it keeps exactly that much room.

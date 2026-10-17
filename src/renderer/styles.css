@@ -1925,3 +1925,80 @@ body.has-overlay {
   min-height: 0;
   overflow-y: auto;
 }
+
+/* ---- Activity drawer: status line is the primary view, the queue opens on demand ---- */
+.status-line {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.status-line-items {
+  flex: 1 1 auto;
+}
+
+.status-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(233, 245, 239, 0.08);
+  color: var(--text);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.status-toggle.hidden {
+  display: none;
+}
+
+.status-toggle:hover {
+  background: rgba(233, 245, 239, 0.14);
+}
+
+.status-toggle-badge {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #1b1405;
+  font-weight: 700;
+  text-align: center;
+}
+
+.status-toggle-badge.hidden {
+  display: none;
+}
+
+.status-toggle-chevron {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms ease;
+}
+
+.status-toggle[aria-expanded="true"] .status-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+.secondary.compact {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+
+/* One scroll area (the drawer body) instead of nested ones. */
+.active-downloads-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* One rule for the shared "hidden" class so toggling it works on every element. */
+.hidden {
+  display: none !important;
+}

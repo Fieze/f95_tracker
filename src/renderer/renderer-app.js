@@ -19,6 +19,7 @@ const state = {
   openOverlay: null,
   archiveQueueReady: false,
   activities: [],
+  activityDrawerOpen: false,
   libraryView: { query: "", filter: "all", sort: "title" }
 };
 
@@ -242,6 +243,8 @@ function scheduleReloadState(minIntervalMs = LIVE_STATE_RELOAD_INTERVAL_MS) {
 
 async function initialize() {
   initLibraryToolbar();
+  $("#status-line-toggle").addEventListener("click", () => setActivityDrawerOpen(!state.activityDrawerOpen));
+  $("#archive-queue-hide").addEventListener("click", () => setActivityDrawerOpen(false));
   syncTopbarHeight();
   window.addEventListener("resize", syncTopbarHeight);
   initAddFolderPanel();

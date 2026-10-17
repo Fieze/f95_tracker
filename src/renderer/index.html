@@ -78,8 +78,13 @@
         </section>
       </main>
 
-      <footer id="status-line" class="status-line" role="status" aria-live="polite">
-        <div id="status-line-items" class="status-line-items"></div>
+      <footer id="status-line" class="status-line">
+        <div id="status-line-items" class="status-line-items" role="status" aria-live="polite"></div>
+        <button id="status-line-toggle" class="status-toggle hidden" type="button" aria-expanded="false" aria-controls="archive-queue-bar">
+          <span class="status-toggle-label">Downloads &amp; archives</span>
+          <span id="status-toggle-badge" class="status-toggle-badge hidden" title="Archives waiting for your decision">0</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="status-toggle-chevron"><path d="M6 15l6-6 6 6" /></svg>
+        </button>
       </footer>
 
       <section id="archive-queue-bar" class="archive-queue-bar panel is-pending" aria-label="Archive Queue">
@@ -88,15 +93,13 @@
             <span class="archive-queue-title">Activity</span>
             <span id="archive-queue-summary" class="archive-queue-summary">No archives detected yet.</span>
           </span>
-          <span class="archive-queue-toggle-meta">
-            <span id="archive-queue-count" class="archive-queue-count">0</span>
-          </span>
+          <button id="archive-queue-hide" class="secondary compact" type="button" aria-label="Hide downloads and archives">Hide</button>
         </div>
         <div id="archive-queue-body" class="archive-queue-body">
           <div id="active-downloads-section" class="active-downloads-section hidden">
             <div class="archive-queue-section-heading">
-              <h4>Active Downloads</h4>
-              <span id="active-downloads-count" class="archive-queue-section-count">0</span>
+              <h4 id="active-downloads-heading">Active Downloads</h4>
+              <span id="active-downloads-count" class="archive-queue-section-count hidden">0</span>
             </div>
             <div id="active-downloads-list" class="active-downloads-list"></div>
           </div>
