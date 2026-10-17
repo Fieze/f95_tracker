@@ -86,6 +86,19 @@ app.whenReady().then(async () => {
   await js("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   await fs.writeFile(path.join(cache, "ui-add-folder.png"), (await window.webContents.capturePage()).toPNG());
   await js("document.querySelector('#overlay-backdrop').click()"); checks.push("add folder dialog");
+  // Keyboard: opening a dialog moves focus inside, Tab stays there, closing returns focus to the opener.
+  await js("document.querySelector('#open-add-thread-panel').focus(); document.querySelector('#open-add-thread-panel').click()");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await js("document.activeElement.name"), "threadUrl", "focus moves into the dialog");
+  await js(`const panel = document.querySelector('#add-thread-panel');
+    const items = [...panel.querySelectorAll('a[href], button, input, select, textarea')].filter((e) => e.getClientRects().length);
+    items[items.length - 1].focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));`);
+  assert.equal(await js("document.querySelector('#add-thread-panel').contains(document.activeElement)"), true, "Tab wraps inside the dialog");
+  await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(await js("document.activeElement.id"), "open-add-thread-panel", "focus returns to the opener"); checks.push("dialog focus");
+
   await js("document.querySelector('#games-list button').click()");
   assert.equal(await js("document.querySelector('#game-details-panel').classList.contains('hidden')"), false); checks.push("details");
   assert.equal(await js("document.querySelector('#game-details-panel .changelog').textContent"), "Fixture changelog");

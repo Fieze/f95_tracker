@@ -136,6 +136,7 @@ function renderOverlays() {
   $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
   renderChromeVisibility();
+  manageOverlayFocus();
 }
 
 function renderChromeVisibility() {
