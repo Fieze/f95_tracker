@@ -137,22 +137,14 @@ function layoutGamesGrid() {
   fitGameTileTitles(container);
 }
 
+// Titles keep one size and are clamped to two lines in CSS; the full title is available as a tooltip.
 function fitGameTileTitles(container = $("#games-list")) {
   if (!container) {
     return;
   }
 
   container.querySelectorAll(".game-tile-title").forEach((titleNode) => {
-    titleNode.style.fontSize = "16px";
-    const computed = window.getComputedStyle(titleNode);
-    const lineHeight = parseFloat(computed.lineHeight) || 18.4;
-    const maxHeight = lineHeight * 2 + 4;
-
-    let fontSize = 16;
-    while (titleNode.scrollHeight > maxHeight && fontSize > 12) {
-      fontSize -= 1;
-      titleNode.style.fontSize = `${fontSize}px`;
-    }
+    titleNode.title = titleNode.textContent;
   });
 }
 

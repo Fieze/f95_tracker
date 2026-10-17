@@ -2002,3 +2002,8 @@ body.has-overlay {
 .hidden {
   display: none !important;
 }
+
+/* Uniform tiles: a fixed two-line title area keeps every tile in a row the same height. */
+.game-tile-title {
+  min-height: calc(2 * 1.22em + 0.08em);
+}

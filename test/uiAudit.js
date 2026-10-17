@@ -124,6 +124,7 @@ const MEASURE = `(() => {
   document.querySelectorAll("body *").forEach((element) => {
     if (!visible(element) || element.closest("svg")) return;
     const style = getComputedStyle(element);
+    if (style.webkitLineClamp && style.webkitLineClamp !== "none") return; // intentional "..." truncation
     if (element.scrollHeight > element.clientHeight + 2 && element.clientHeight > 0 && (style.overflowY === "hidden" || style.overflowY === "clip") && element.textContent.trim() && style.display !== "inline") {
       clipped.push("vertical " + (element.id ? "#" + element.id : "") + "." + String(element.className).split(" ").filter(Boolean).slice(0, 2).join(".") + " " + element.clientHeight + "<" + element.scrollHeight);
     }
