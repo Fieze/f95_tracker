@@ -235,8 +235,8 @@
       <div class="overlay-panel-header">
         <div>
           <p class="overlay-eyebrow">Game Details</p>
-          <h3 id="game-details-panel-title">Selected Game</h3>
-          <p id="game-details-panel-subtitle" class="overlay-panel-subtitle">Browse version info, installations, screenshots, and downloads for the selected game.</p>
+          <h3 id="game-details-panel-title" class="visually-hidden">Selected Game</h3>
+          <nav id="game-details-nav" class="details-nav" aria-label="Sections of this game"></nav>
         </div>
         <button id="close-game-details" class="overlay-close" type="button" aria-label="Close game details">Close</button>
       </div>
@@ -384,11 +384,11 @@
           </div>
         </div>
         <div class="developer-links hidden"></div>
-        <div class="content-block">
+        <div class="content-block" data-section="installations">
           <h5 class="content-heading">Installations</h5>
           <div class="install-folders"></div>
         </div>
-        <div class="content-block">
+        <div class="content-block" data-section="overview">
           <h5 class="content-heading">Overview</h5>
           <p class="overview"></p>
           <details class="changelog-section hidden">
@@ -400,16 +400,16 @@
             <ol class="history-list"></ol>
           </details>
         </div>
-        <div class="content-block">
+        <div class="content-block" data-section="genre">
           <h5 class="content-heading">Genre</h5>
           <div class="tags"></div>
         </div>
-        <div class="content-block">
+        <div class="content-block" data-section="screenshots">
           <h5 class="content-heading">Screenshots</h5>
           <div class="screenshots"></div>
         </div>
         <div class="warnings"></div>
-        <div class="download-groups"></div>
+        <div class="download-groups" data-section="downloads"></div>
         <details class="debug-panel">
           <summary>Debug</summary>
           <pre class="debug-output"></pre>

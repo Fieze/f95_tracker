@@ -115,14 +115,14 @@ const MEASURE = `(() => {
   if (document.documentElement.scrollWidth > innerWidth + 1) issues.push({ type: "horizontal-scroll", scrollWidth: document.documentElement.scrollWidth, innerWidth });
   const clipped = [];
   document.querySelectorAll("body *").forEach((element) => {
-    if (!visible(element) || element.closest("svg")) return;
+    if (!visible(element) || element.closest("svg, .visually-hidden")) return;
     const style = getComputedStyle(element);
     if (element.scrollWidth > element.clientWidth + 2 && element.clientWidth > 0 && (style.overflowX === "hidden" || style.overflowX === "clip") && style.textOverflow !== "ellipsis" && element.textContent.trim()) {
       clipped.push((element.id ? "#" + element.id : "") + "." + String(element.className).split(" ").filter(Boolean).slice(0, 2).join(".") + " \\"" + element.textContent.trim().slice(0, 40) + "\\"");
     }
   });
   document.querySelectorAll("body *").forEach((element) => {
-    if (!visible(element) || element.closest("svg")) return;
+    if (!visible(element) || element.closest("svg, .visually-hidden")) return;
     const style = getComputedStyle(element);
     if (style.webkitLineClamp && style.webkitLineClamp !== "none") return; // intentional "..." truncation
     if (element.scrollHeight > element.clientHeight + 2 && element.clientHeight > 0 && (style.overflowY === "hidden" || style.overflowY === "clip") && element.textContent.trim() && style.display !== "inline") {

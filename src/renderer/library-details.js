@@ -468,8 +468,32 @@ function renderGameDetailsPanel() {
   }
 
   $("#game-details-panel-title").textContent = game.title;
-  $("#game-details-panel-subtitle").textContent = `Version ${game.currentVersion || "unknown"} | ${game.developer || "Unknown developer"}`;
   body.appendChild(buildGameDetailsCard(game));
+  renderGameDetailsNav(panel, body);
+}
+
+const DETAIL_SECTIONS = [
+  ["installations", "Installations"],
+  ["overview", "Overview"],
+  ["genre", "Genre"],
+  ["screenshots", "Screenshots"],
+  ["downloads", "Downloads"]
+];
+
+// Jump links in the sticky panel header: a long details view stays navigable without hunting through scrolling.
+function renderGameDetailsNav(panel, body) {
+  const nav = $("#game-details-nav");
+  nav.innerHTML = "";
+  for (const [key, label] of DETAIL_SECTIONS) {
+    const section = body.querySelector(`[data-section="${key}"]`);
+    if (!section || section.classList.contains("hidden") || section.children.length === 0) continue;
+    const button = createNode("button", "details-nav-link", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      section.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    });
+    nav.appendChild(button);
+  }
 }
 
 function getEditingFolderContext() {
