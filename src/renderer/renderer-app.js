@@ -248,6 +248,7 @@ async function initialize() {
   syncTopbarHeight();
   window.addEventListener("resize", syncTopbarHeight);
   initAddFolderPanel();
+  $("#setup-hint-action").addEventListener("click", () => { state.openOverlay = "settings"; render(); });
   $("#settings-form").addEventListener("submit", handleSettingsSubmit);
   document.querySelectorAll(".browse-folder-button").forEach((button) => {
     button.addEventListener("click", handleBrowseFolderClick);

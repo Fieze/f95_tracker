@@ -637,10 +637,12 @@ function renderGames() {
       ? `${visibleGames.length} of ${state.games.length}`
       : "";
 
+  renderSetupHint();
   if (visibleGames.length === 0) {
     container.className = "games-list empty-state";
-    container.textContent = state.games.length === 0 ? "No threads added yet." : "No games match the current filter.";
+    container.textContent = "";
     container.style.removeProperty("grid-template-columns");
+    container.appendChild(buildLibraryEmptyState(state.games.length === 0));
     return;
   }
 
@@ -706,6 +708,51 @@ function renderGames() {
   });
 
   layoutGamesGrid();
+}
+
+// Empty library: explain what to do and offer the two ways in. Filtered to nothing: offer to clear the filters.
+function buildLibraryEmptyState(libraryIsEmpty) {
+  const card = createNode("div", "empty-card");
+  if (libraryIsEmpty) {
+    card.appendChild(createNode("h4", "empty-card-title", "Your library is empty"));
+    card.appendChild(createNode("p", "empty-card-text", "Add a thread from F95Zone to start tracking it, or register a game you already have on disk."));
+    const actions = createNode("div", "empty-card-actions");
+    const addThread = createNode("button", "primary", "Add thread");
+    addThread.type = "button";
+    addThread.addEventListener("click", () => { state.openOverlay = "add-thread"; render(); });
+    const addFolder = createNode("button", "secondary", "Add existing folder");
+    addFolder.type = "button";
+    addFolder.addEventListener("click", () => openAddFolderPanel());
+    actions.append(addThread, addFolder);
+    card.appendChild(actions);
+  } else {
+    card.appendChild(createNode("h4", "empty-card-title", "No games match"));
+    card.appendChild(createNode("p", "empty-card-text", "Nothing in your library fits the current search and filter."));
+    const clear = createNode("button", "secondary", "Clear search and filter");
+    clear.type = "button";
+    clear.addEventListener("click", () => {
+      state.libraryView.query = "";
+      state.libraryView.filter = "all";
+      $("#library-search").value = "";
+      $("#library-filter").value = "all";
+      saveLibraryView();
+      renderGames();
+    });
+    card.appendChild(clear);
+  }
+  return card;
+}
+
+// A one-line hint while the folders needed for downloads and installs are not configured yet.
+function renderSetupHint() {
+  const missing = [];
+  if (!(state.settings.installRoot || "").trim()) missing.push("an install root");
+  if (!(state.settings.watchFolder || "").trim()) missing.push("a watch folder");
+  const hint = $("#setup-hint");
+  hint.classList.toggle("hidden", missing.length === 0);
+  if (missing.length) {
+    $("#setup-hint-text").textContent = `Set ${missing.join(" and ")} in Settings to download, extract and install games.`;
+  }
 }
 
 async function handleAddThread(event) {

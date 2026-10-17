@@ -199,6 +199,9 @@ app.whenReady().then(async () => {
     { name: "library", setup: async () => idle(), apply: "state.openOverlay = null; state.selectedGameId = null" },
     { name: "library-busy", setup: async () => busy(), apply: "state.openOverlay = null; state.selectedGameId = null; state.activityDrawerOpen = false" },
     { name: "library-busy-drawer", setup: async () => busy(), apply: "state.openOverlay = null; state.selectedGameId = null; state.activityDrawerOpen = true" },
+    { name: "library-empty", setup: async () => idle(), apply: "state.games = []; state.openOverlay = null; render()" },
+    { name: "library-no-match", setup: async () => idle(), apply: "state.libraryView.query = 'zzzz'; state.openOverlay = null; render()" },
+    { name: "library-setup-hint", setup: async () => idle(), apply: "state.settings = { ...state.settings, installRoot: '', watchFolder: '' }; state.openOverlay = null; render()" },
     { name: "settings", setup: async () => idle(), apply: "state.openOverlay = 'settings'" },
     { name: "settings-busy", setup: async () => busy(), apply: "state.openOverlay = 'settings'" },
     { name: "login", setup: async () => idle(), apply: "state.openOverlay = 'login'" },
@@ -216,6 +219,7 @@ app.whenReady().then(async () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     for (const state of states) {
       await state.setup();
+      await js("state.libraryView.query = ''");
       await js(`${state.apply}; reloadState().then(() => { ${state.apply}; render(); })`);
       await settle();
       const issues = JSON.parse(await js(MEASURE));

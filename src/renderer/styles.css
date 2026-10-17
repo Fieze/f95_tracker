@@ -2071,3 +2071,52 @@ body.has-overlay {
 .overlay-panel-status-row:has(.status-chip:empty) {
   display: none;
 }
+
+/* ---- Empty states and setup hint ---- */
+.games-list.empty-state {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  min-height: 220px;
+}
+
+.empty-card {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  max-width: 460px;
+  padding: 24px;
+  text-align: center;
+}
+
+.empty-card-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.empty-card-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.empty-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.setup-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(226, 176, 76, 0.28);
+  border-radius: 14px;
+  background: rgba(226, 176, 76, 0.08);
+  font-size: 0.9rem;
+}
