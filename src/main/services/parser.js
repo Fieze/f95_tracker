@@ -24,6 +24,28 @@ const THREAD_STATUS_LABELS = new Map([
   ["completed", "Complete"]
 ]);
 
+// Engine prefixes as shown on F95Zone; the label text is the reliable signal, CSS classes differ per engine.
+const ENGINE_PREFIXES = new Map([
+  ["ren'py", "Ren'Py"],
+  ["renpy", "Ren'Py"],
+  ["rpgm", "RPGM"],
+  ["unity", "Unity"],
+  ["unreal engine", "Unreal Engine"],
+  ["html", "HTML"],
+  ["java", "Java"],
+  ["flash", "Flash"],
+  ["qsp", "QSP"],
+  ["rags", "RAGS"],
+  ["tads", "TADS"],
+  ["adrift", "ADRIFT"],
+  ["webgl", "WebGL"],
+  ["wolf rpg", "Wolf RPG"],
+  ["godot", "Godot"]
+]);
+
+const CHANGELOG_LABEL_PATTERN = /change-?log|release notes/i;
+const MAX_CHANGELOG_LENGTH = 20000;
+
 function textOf(node) {
   return String(node.text() || "").replace(/\s+/g, " ").trim();
 }
@@ -115,6 +137,74 @@ function extractThreadStatus($, titleNode) {
   }
 
   return null;
+}
+
+function extractTitlePrefixes($, titleNode) {
+  const prefixes = [];
+  titleNode?.find(".labelLink").each((_, node) => {
+    const text = normalizeWhitespace($(node).text());
+    if (text) prefixes.push(text);
+  });
+  return prefixes;
+}
+
+function extractEngineFromPrefixes(prefixes) {
+  for (const prefix of prefixes) {
+    const engine = ENGINE_PREFIXES.get(prefix.toLowerCase());
+    if (engine) return engine;
+  }
+  return null;
+}
+
+// Text right before a spoiler block (skipping blank text and <br>), used to find the "Changelog:" label.
+// The label and its colon are often separate nodes ("<b>Changelog</b>:"), so the nearest few pieces are joined.
+function labelBeforeSpoiler($, spoilerNode) {
+  const pieces = [];
+  let node = spoilerNode;
+  for (let depth = 0; node && depth < 4 && pieces.length < 3; depth += 1) {
+    let sibling = node.prev;
+    while (sibling && pieces.length < 3) {
+      const isBreak = sibling.type === "tag" && sibling.name === "br";
+      // Another spoiler is a boundary: its content belongs to a different label.
+      if (sibling.type === "tag" && /bbCodeBlock|bbCodeSpoiler/.test(sibling.attribs?.class || "")) return pieces.join(" ");
+      const text = isBreak ? "" : normalizeWhitespace($(sibling).text());
+      if (text) pieces.unshift(text.slice(-60));
+      sibling = sibling.prev;
+    }
+    if (pieces.length) break;
+    node = node.parent;
+  }
+  return pieces.join(" ");
+}
+
+function spoilerText($, spoilerNode) {
+  const content = $(spoilerNode).find(".bbCodeBlock-content").first();
+  const clone = content.length ? content.clone() : $(spoilerNode).clone();
+  clone.find("br").replaceWith("\n");
+  clone.find("p, div, li").each((_, node) => { $(node).append("\n"); });
+  return String(clone.text() || "")
+    .replace(/^[ \t]+/gm, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function truncateAtLine(text, limit) {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const lastBreak = cut.lastIndexOf("\n");
+  return `${(lastBreak > limit * 0.6 ? cut.slice(0, lastBreak) : cut).trimEnd()}\n[...]`;
+}
+
+function extractChangelog($, article) {
+  let changelog = null;
+  article.find(".bbCodeSpoiler, .bbCodeBlock--spoiler").each((_, node) => {
+    if (changelog || $(node).parents(".bbCodeSpoiler, .bbCodeBlock--spoiler").length) return;
+    if (!CHANGELOG_LABEL_PATTERN.test(labelBeforeSpoiler($, node))) return;
+    const text = spoilerText($, node);
+    if (text) changelog = truncateAtLine(text, MAX_CHANGELOG_LENGTH);
+  });
+  return changelog;
 }
 
 function extractVersionFromTitle(title) {
@@ -544,6 +634,8 @@ function parseThread(html, sourceUrl) {
     "Unknown game";
   const rawTitle = extractDisplayTitleText($, titleNode) || fullTitleText;
   const threadStatus = extractThreadStatus($, titleNode);
+  const titlePrefixes = extractTitlePrefixes($, titleNode);
+  const loggedIn = $("html").attr("data-logged-in") === "true";
 
   let article = $(".message-threadStarterPost .message-body").first();
   if (!article.length) {
@@ -573,10 +665,10 @@ function parseThread(html, sourceUrl) {
   const logicalLines = buildLogicalLines($, article.length ? article : $.root());
 
   const developer = titleParts.developer || null;
-  const engine = taggedEngine || titleParts.engine || null;
+  const engine = extractEngineFromPrefixes(titlePrefixes) || taggedEngine || titleParts.engine || null;
   const overview = extractFieldText(logicalLines, "overview");
   const releaseDate = extractFieldText(logicalLines, "releaseDate");
-  const changelog = null;
+  const changelog = article.length ? extractChangelog($, article) : null;
 
   const tags = [];
   $(".js-tagList a, .tagItem").each((_, node) => {
@@ -586,7 +678,9 @@ function parseThread(html, sourceUrl) {
     }
   });
 
-  const currentVersion = titleParts.currentVersion || null;
+  // The thread title is authoritative; the "Version:" field only fills in when the title has no version.
+  const fieldVersion = sanitizeVersion(extractFieldText(logicalLines, "version"));
+  const currentVersion = titleParts.currentVersion || fieldVersion || null;
 
   if (!currentVersion) {
     warnings.push("Could not confidently determine the current thread version.");
@@ -594,17 +688,26 @@ function parseThread(html, sourceUrl) {
 
   if (detectLoginPage(sourceUrl, html)) {
     warnings.push("The fetched page looks like a login page instead of the thread.");
-  } else if (detectAuthWall(html)) {
+  } else if (!article.length || (!loggedIn && detectAuthWall(html) && opText.trim().length < 200)) {
     warnings.push("The fetched page looks like a restricted view without full thread content.");
   }
 
   const downloadExtraction = collectDownloadGroups($, article.length ? article : $.root());
   const downloadGroups = downloadExtraction.groups;
   if (downloadGroups.length === 0) {
-    warnings.push("No download links were detected in the opening post.");
+    warnings.push(
+      loggedIn || html.indexOf("data-logged-in") === -1
+        ? "No download links were detected in the opening post."
+        : "Download links are only visible when logged in to F95Zone."
+    );
   }
 
   const imageAssets = extractImageAssets($, article.length ? article : $.root(), sourceUrl);
+  // Thread covers (/data/covers/) are real artwork; any other og:image is just the site favicon.
+  const ogImage = String($("meta[property='og:image']").attr("content") || "").trim();
+  if (!imageAssets.bannerImageUrl && /\/data\/covers\//.test(ogImage)) {
+    imageAssets.bannerImageUrl = normalizeAssetUrl(sourceUrl, ogImage);
+  }
   const candidateBlocks = downloadExtraction.sectionLines
     .filter((line) => isDownloadRow(line.text))
     .map((line) => line.text.slice(0, 220));
@@ -630,6 +733,8 @@ function parseThread(html, sourceUrl) {
       articleFound: article.length > 0,
       articleNode: article.length ? article.get(0).tagName : null,
       articleClass: article.length ? article.attr("class") || "" : "",
+      loggedIn,
+      titlePrefixes,
       loginPageDetected: detectLoginPage(sourceUrl, html),
       authWallDetected: detectAuthWall(html),
       titleDetected: rawTitle,

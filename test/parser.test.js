@@ -65,7 +65,7 @@ test("parseThread extracts core OP metadata and links", () => {
   assert.equal(result.engine, "Ren'Py");
   assert.equal(result.overview, "A short test story.");
   assert.equal(result.releaseDate, "2026-03-01");
-  assert.equal(result.changelog, null);
+  assert.equal(result.changelog, "Added one route.\n\nFixed one bug.");
   assert.deepEqual(result.tags, ["Male Protagonist", "Adventure"]);
   assert.equal(result.bannerImageUrl, "https://example.org/banner.jpg");
   assert.deepEqual(result.screenshotImageUrls, [
@@ -470,4 +470,52 @@ test("parseThread prefers full screenshot URLs over thumb images", () => {
   assert.deepEqual(result.screenshotImageUrls, [
     "https://attachments.f95zone.to/2017/03/16275_location_mombed04.jpg"
   ]);
+});
+
+const fixtureHtml = (name) => require("fs").readFileSync(require("path").join(__dirname, "fixtures", "threads", `${name}.html`), "utf8");
+
+test("parseThread reads engine, changelog, tags, cover and downloads from a logged-in Ren'Py thread", () => {
+  const parsed = parseThread(fixtureHtml("renpy-logged-in"), "https://f95zone.to/threads/example-game.1/");
+  assert.equal(parsed.engine, "Ren'Py");
+  assert.equal(parsed.title, "Example Game");
+  assert.equal(parsed.developer, "Example Dev");
+  assert.equal(parsed.currentVersion, "v0.1.4.0");
+  assert.equal(parsed.releaseDate, "2026-10-15");
+  assert.deepEqual(parsed.tags, ["3dcg", "animated", "incest"]);
+  assert.equal(parsed.bannerImageUrl, "https://attachments.f95zone.to/2023/01/1_Cover.jpg");
+  assert.equal(parsed.changelog, "v0.1.4.0\n- New events with Gene\n- Fixed bugs\n\nv0.1.3.0\n- Added a gallery");
+  assert.equal(parsed.downloadGroups.length, 1);
+  assert.deepEqual(parsed.downloadGroups[0].links.map((link) => link.label), ["BUZZHEAVIER", "DATANODES", "MEGA", "PIXELDRAIN"]);
+  assert.deepEqual(parsed.warnings, []);
+  assert.equal(parsed.parserDebug.loggedIn, true);
+});
+
+test("parseThread detects non-Ren'Py engines from the prefix label and explains guest views", () => {
+  const parsed = parseThread(fixtureHtml("rpgm-guest"), "https://f95zone.to/threads/another-game.2/");
+  assert.equal(parsed.engine, "RPGM");
+  assert.equal(parsed.threadStatus, "Complete");
+  assert.equal(parsed.currentVersion, "v1.3.1.69 FULL + DLCs");
+  assert.equal(parsed.changelog, "v1.3.1.69\n- Balance changes");
+  assert.deepEqual(parsed.warnings, ["Download links are only visible when logged in to F95Zone."]);
+});
+
+test("parseThread truncates huge changelogs and falls back to the Version field", () => {
+  const long = Array.from({ length: 4000 }, (_, index) => `- change ${index}`).join("<br>");
+  const html = `<html data-logged-in="true"><body><h1 class="p-title-value">Plain Title</h1>
+    <article class="message-threadStarterPost"><div class="bbWrapper"><b>Version</b>: 2.5 Extra<br>
+    <b>Changelog</b>:<br><div class="bbCodeBlock bbCodeBlock--spoiler"><div class="bbCodeBlock-content">${long}</div></div></div></article></body></html>`;
+  const parsed = parseThread(html, "https://f95zone.to/threads/plain.3/");
+  assert.equal(parsed.currentVersion, "2.5 Extra");
+  assert.ok(parsed.changelog.length <= 20010);
+  assert.ok(parsed.changelog.endsWith("[...]"));
+});
+
+test("parseThread falls back to the thread cover from og:image but ignores the site favicon", () => {
+  const page = (ogImage) => `<html data-logged-in="true"><head><meta property="og:image" content="${ogImage}" /></head><body>
+    <h1 class="p-title-value">Game [v1.0] [Dev]</h1>
+    <article class="message-threadStarterPost"><div class="bbWrapper"><b>Overview:</b><br>Text only.</div></article></body></html>`;
+  const withCover = parseThread(page("https://f95zone.to/data/covers/thread/o/1/1.jpg?1"), "https://f95zone.to/threads/g.1/");
+  assert.equal(withCover.bannerImageUrl, "https://f95zone.to/data/covers/thread/o/1/1.jpg?1");
+  const favicon = parseThread(page("https://f95zone.to/assets/favicon-32x32.png"), "https://f95zone.to/threads/g.1/");
+  assert.equal(favicon.bannerImageUrl, null);
 });
