@@ -9,16 +9,6 @@ module.exports = {
       "SELECT id, aliases, has_seasons, installed_version, install_path, current_version FROM games WHERE thread_id = ? OR thread_url = ? ORDER BY id ASC LIMIT 1",
       [threadId, parsedThread.sourceUrl]
     );
-    if (existing && parsedThread.dataSource === "api") {
-      const previous = this.getGameById(existing.id);
-      for (const field of ["developer", "engine", "threadStatus", "overview", "releaseDate", "changelog"]) {
-        if (!parsedThread[field]) parsedThread[field] = previous[field];
-      }
-      if (!parsedThread.tags?.length) parsedThread.tags = previous.tags;
-      if (!parsedThread.downloadGroups?.length) parsedThread.downloadGroups = previous.downloadGroups;
-      if (!parsedThread.bannerImage) parsedThread.bannerImage = previous.bannerImage;
-      if (!parsedThread.screenshotImages?.length) parsedThread.screenshotImages = previous.screenshotImages;
-    }
     const aliasSet = new Set([
       ...(existing ? safeJsonParse(existing.aliases, []) : []),
       parsedThread.title,
@@ -95,9 +85,6 @@ module.exports = {
     }
 
     const game = this.first("SELECT * FROM games WHERE thread_id = ?", [threadId]);
-    this.db.run("UPDATE games SET data_source = ?, api_last_promoted = ?, api_detail_checked_at = ? WHERE id = ?", [
-      parsedThread.dataSource || "scraper", parsedThread.apiLastPromoted ?? null, parsedThread.apiDetailCheckedAt || null, game.id
-    ]);
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [game.id]);
 
     const linkStmt = this.db.prepare(`
@@ -148,13 +135,6 @@ module.exports = {
       [new Date().toISOString(), gameId]
     );
     this.insertSyncRun(gameId, false, [], errorMessage);
-    await this.persist();
-  },
-
-  async saveApiSummary(gameId, fingerprint) {
-    const row = this.first("SELECT parser_debug FROM games WHERE id = ?", [gameId]);
-    const debug = { ...safeJsonParse(row.parser_debug, {}), apiSummaryFingerprint: fingerprint };
-    this.db.run("UPDATE games SET parser_debug = ? WHERE id = ?", [JSON.stringify(debug), gameId]);
     await this.persist();
   },
 
@@ -314,9 +294,6 @@ module.exports = {
       id: row.id,
       threadUrl: row.thread_url,
       threadId: row.thread_id,
-      dataSource: row.data_source || "scraper",
-      apiLastPromoted: row.api_last_promoted,
-      apiDetailCheckedAt: row.api_detail_checked_at,
       title: row.title,
       threadTitle: row.thread_title || row.title,
       hasSeasons: Boolean(row.has_seasons),

@@ -15,6 +15,5 @@ require("./parser.test");
 require("./sevenZip.test");
 require("./safety.test");
 require("./integration.test");
-require("./api.test");
 require("./robustness.test");
 require("./libraryFilters.test");

@@ -163,18 +163,12 @@ npm.cmd run build
 
 ## Notes
 
-### F95ApiDB
+### Data Source
 
-In Settings, save your personal F95ApiDB key and use **Test Connection**. Metadata fetching then works without an F95Zone login. Account approval and separate download-link approval may be required by the provider. Keys are encrypted using Electron safeStorage in a separate file, never returned to the renderer or included in database exports. If secure storage is unavailable, the key lasts only for the current session.
-
-The API supplies metadata, changelog and image/download URLs. Existing image caching and host-download workflows remain in use. Empty optional fields and unavailable download lists preserve existing data. Missing/unpublished or incomplete API records use the scraper once when a forum login is available; authentication, rate-limit and service errors do not trigger scraping. Without a key, the existing scraper remains active.
-
-Background sync batches 25 thread IDs, reloads changed entries and checks full details at least every 24 hours while the app runs. Requests are serialized at no more than one per second. Authentication failures pause API requests until the key is saved again or the connection is tested. On first migration of an existing database, `backups/pre-api-upgrade.sqlite` preserves its original contents. Old JSON exports remain importable; importing does not replace the separately stored key.
-
-Bookmarks and discovery features are disabled. Follow the [provider terms](https://f95api.xyz/terms): this integration is an ordinary user-run desktop client; do not connect keys to AI agents or MCP systems. Automated tests use local fixtures only. Validate real metadata, download permissions, images and changelog through the app with your approved account, then check download, installation and launch.
+Thread metadata is scraped directly from the F95Zone website through the app's own login session. An earlier version offered an optional F95ApiDB integration; it has been removed. A key stored by that version is deleted on startup, and `backups/pre-api-upgrade.sqlite` still preserves the original database from that migration. Old JSON exports remain importable.
 
 - The app is designed for Windows.
 - Thread fetching and many download links require a valid F95Zone session.
 - Direct in-app downloading depends on host support and successful resolution of the final file URL.
 - Archive extraction uses bundled `7z` resources that are included in the packaged app.
-- Library and installation data stay local. API mode sends requested thread IDs and API authentication to F95ApiDB; the app also requests forum assets and download hosts as needed.
+- Library and installation data stay local. The app only contacts F95Zone and the download hosts needed for assets and files.

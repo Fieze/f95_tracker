@@ -3,8 +3,6 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("f95App", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   updateSettings: (payload) => ipcRenderer.invoke("settings:update", payload),
-  setApiKey: (key) => ipcRenderer.invoke("api:setKey", { key }),
-  testApiConnection: () => ipcRenderer.invoke("api:test"),
   exportData: () => ipcRenderer.invoke("data:export"),
   importData: () => ipcRenderer.invoke("data:import"),
   selectFolder: (payload) => ipcRenderer.invoke("folders:select", payload),

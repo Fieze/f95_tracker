@@ -92,3 +92,31 @@ test("game history records version changes once and survives export/import", asy
   await db.importSnapshot(snapshot);
   assert.equal(db.getGames()[0].history.length, 0);
 });
+
+test("upgrading an older database keeps a one-time backup before adding columns", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "f95-upgrade-"));
+  const db = new DatabaseService(dir);
+  await db.initialize();
+  // Simulate a database created before the data_source column existed.
+  db.db.run("ALTER TABLE games DROP COLUMN data_source");
+  await db.persist();
+  const before = await fs.readFile(db.dbPath);
+  const reopened = new DatabaseService(dir);
+  await reopened.initialize();
+  assert.deepEqual(await fs.readFile(path.join(dir, "backups", "pre-api-upgrade.sqlite")), before);
+});
+
+test("legacy API key file is removed on startup", async () => {
+  const { AppService } = require("../src/main/services/appService");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "f95-legacy-key-"));
+  const keyFile = path.join(dir, "f95-api-key.bin");
+  await fs.writeFile(keyFile, "secret");
+  const service = new AppService({
+    userDataPath: dir,
+    authSession: { cookies: { get: async () => [] } },
+    folderWatcher: { start: async () => {}, stop: async () => {} }
+  });
+  await service.initialize();
+  await assert.rejects(() => fs.access(keyFile));
+  await service.dispose();
+});

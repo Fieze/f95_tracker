@@ -28,8 +28,6 @@ function bindIpc() {
 
   handle("app:bootstrap", async () => ctx.appService.bootstrap());
   handle("settings:update", async (_event, payload) => ctx.appService.updateSettings(payload));
-  handle("api:setKey", async (_event, payload) => ctx.appService.setApiKey(payload?.key));
-  handle("api:test", async () => ctx.appService.testApiConnection());
   handle("data:export", async () => {
     const result = await dialog.showSaveDialog(ctx.mainWindow, {
       title: "Export data",

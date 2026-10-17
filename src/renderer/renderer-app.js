@@ -231,17 +231,6 @@ async function initialize() {
     button.addEventListener("click", handleBrowseFolderClick);
   });
   $("#export-data").addEventListener("click", handleExportData);
-  for (const [id, action] of [
-    ["api-save", async () => { const input = $("#api-key"); const key = input.value; input.value = ""; if (!key.trim()) throw new Error("Enter a key first."); await window.f95App.setApiKey(key); }],
-    ["api-remove", () => window.f95App.setApiKey("")],
-    ["api-test", () => window.f95App.testApiConnection()]
-  ]) {
-    $("#" + id).addEventListener("click", async (event) => {
-      event.currentTarget.disabled = true;
-      try { await action(); } catch (error) { alert(error.message); }
-      finally { event.currentTarget.disabled = false; await reloadState(); }
-    });
-  }
   $("#import-data").addEventListener("click", handleImportData);
   $("#add-thread-form").addEventListener("submit", handleAddThread);
   $("#refresh-all").addEventListener("click", async () => {

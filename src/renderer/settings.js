@@ -7,10 +7,6 @@ function setSettingsForm(settings) {
 }
 
 function renderAuth() {
-  const api = state.api || {};
-  $("#api-status").textContent = api.configured
-    ? `${api.persistent ? "Key stored securely" : "Key available for this session only"}. ${api.message || "Connection not tested."}`
-    : api.loadFailed ? "Saved API key could not be loaded. Enter it again." : "No API key. Metadata requires an F95Zone login.";
   const statusNode = $("#auth-status");
   const resultNode = $("#auth-check-result");
   const loginBtn = $("#open-login-panel");
@@ -22,7 +18,7 @@ function renderAuth() {
   if (state.auth.loggedIn) {
     statusNode.textContent = "Logged in. The app is now using its own F95Zone session.";
   } else {
-    statusNode.textContent = api.configured ? "API metadata is available without an F95Zone login. Sign in here for forum access or scraper fallback." : "Not logged in. Configure an API key or sign in to F95Zone.";
+    statusNode.textContent = "Not logged in. Sign in to F95Zone to add and refresh threads.";
   }
 
   if (resultNode) {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, session, safeStorage } = require("electron");
+const { app, BrowserWindow, dialog, session } = require("electron");
 const { AppService } = require("./services/appService");
 const { Logger } = require("./services/logger");
 const {
@@ -49,7 +49,6 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ctx.appService = new AppService({
     userDataPath: app.getPath("userData"),
     authSession,
-    safeStorage,
     logger: ctx.logger.child("service"),
     loggers: {
       download: ctx.downloadLogger,

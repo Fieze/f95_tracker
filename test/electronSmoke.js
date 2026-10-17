@@ -1,6 +1,6 @@
 // Runs the real renderer and preload against isolated local test data.
 // Remote login/download hosts and game processes are replaced by controlled fixtures.
-const { app, BrowserWindow, ipcMain, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const fs = require("fs/promises");
 const path = require("path");
 const assert = require("assert/strict");
@@ -18,7 +18,6 @@ app.whenReady().then(async () => {
   await fs.mkdir(cache, { recursive: true });
   const root = await fs.mkdtemp(path.join(cache, "ui-smoke-"));
   service = new AppService({ userDataPath: root,
-    safeStorage, apiOptions: { fetchImpl: async () => Response.json({ items: [] }) },
     authSession: { cookies: { get: async () => loggedIn ? [{ name: "xf_user", value: "test", domain: "f95zone.to", path: "/" }] : [], remove: async () => { loggedIn = false; } } },
     folderWatcher: { start: async () => {}, stop: async () => {}, ignoreFile: () => {} },
     downloadFetch: async () => new Response(zipFixture([{ name: "game.exe", content: "fixture executable" }]), {
@@ -44,8 +43,6 @@ app.whenReady().then(async () => {
   handle("games:launchExecutable", (payload) => service.launchExecutable(payload));
   handle("games:updateFolderMetadata", (payload) => service.updateGameFolderMetadata(payload, payload));
   handle("settings:update", (payload) => service.updateSettings(payload));
-  handle("api:setKey", (payload) => service.setApiKey(payload.key));
-  handle("api:test", () => service.testApiConnection());
   handle("auth:openLogin", () => { loggedIn = true; return service.getAuthState(); });
   handle("auth:logout", () => service.logout());
   handle("data:export", async () => { await service.exportDataToFile(exportPath); return { canceled: false, path: exportPath }; });
@@ -67,23 +64,7 @@ app.whenReady().then(async () => {
   assert.equal(await js("document.querySelector('#game-details-panel').classList.contains('hidden')"), false); checks.push("details");
   assert.equal(await js("document.querySelector('#game-details-panel .changelog').textContent"), "Fixture changelog");
   await js("document.querySelector('#open-settings-panel').click(); handleExportData()");
-  await js("window.f95App.setApiKey('ui-fixture-key').then(() => undefined)");
-  checks.push("API key IPC");
-  await js("window.f95App.testApiConnection().then(() => undefined)");
-  checks.push("API test IPC");
-  await js("reloadState()");
-  assert.equal(await js("state.api.configured"), true);
-  assert.ok((await js("document.querySelector('#api-status').textContent")).includes("successful"));
-  assert.equal(await js("document.querySelector('#api-key').value"), "");
-  if (service.apiKeyStore.getState().persistent) {
-    assert.ok(!(await fs.readFile(service.apiKeyStore.filePath)).includes(Buffer.from("ui-fixture-key")));
-    assert.equal(service.apiKeyStore.getState().persistent, true);
-  }
-  checks.push("API rendering and secure storage");
   await new Promise((resolve) => setTimeout(resolve, 200));
-  await fs.writeFile(path.join(cache, "ui-api-settings.png"), (await window.webContents.capturePage()).toPNG());
-  await js("window.f95App.setApiKey('').then(reloadState)");
-  assert.equal(await js("state.api.configured"), false); checks.push("API settings, secure storage and connection fixture");
   assert.equal(await js("document.querySelector('#settings-status').textContent"), "exported");
   await js("handleImportData()");
   assert.equal(await js("document.querySelector('#settings-status').textContent"), "imported"); checks.push("export/import");

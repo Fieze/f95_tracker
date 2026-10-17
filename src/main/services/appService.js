@@ -12,15 +12,12 @@ const { SyncScheduler } = require("./syncScheduler");
 const { ThreadFetcher } = require("./threadFetcher");
 const { noopLogger } = require("./logger");
 const { normalizeThreadUrl } = require("./utils");
-const { ApiKeyStore } = require("./apiKeyStore");
-const { F95ApiClient } = require("./f95ApiClient");
-const { ThreadDataSource, summaryFingerprint } = require("./threadDataSource");
 
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 class AppService {
-  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess, safeStorage, apiOptions }) {
+  constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess }) {
     this.onStateChanged = onStateChanged;
     this.onGameUpdateAvailable = onGameUpdateAvailable;
     this.authSession = authSession;
@@ -70,9 +67,6 @@ class AppService {
     this.lastExtractionProgressEmitAt = 0;
     this.lastExtractionProgressLogAt = 0;
     this.db = new DatabaseService(userDataPath);
-    this.apiKeyStore = new ApiKeyStore(userDataPath, safeStorage);
-    this.apiClient = new F95ApiClient(this.apiKeyStore, apiOptions);
-    this.dataSource = new ThreadDataSource(this);
     this.fetcher = new ThreadFetcher(authSession);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
     this.extractArchiveWithProgress = extractArchiveWithProgress;
@@ -90,7 +84,7 @@ class AppService {
       userDataPath: this.userDataPath
     });
     await this.db.initialize();
-    await this.apiKeyStore.initialize();
+    await this.removeLegacyApiKey();
     await this.db.resetInterruptedArchiveJobs();
     await this.pruneMissingArchiveJobs();
     await fs.mkdir(this.assetCachePath, { recursive: true });
@@ -115,7 +109,6 @@ class AppService {
     return {
       settings: this.db.getSettings(),
       auth: await this.getAuthState(),
-      api: this.apiClient.getState(),
       games: this.db.getGames(),
       archiveJobs: this.db.listArchiveJobs(),
       currentExtraction: this.currentExtraction,
@@ -155,20 +148,18 @@ class AppService {
     return { path: targetPath };
   }
 
-  async setApiKey(value) {
-    await this.apiClient.queue;
-    await this.apiKeyStore.set(value);
-    this.apiClient.reset();
-    this.emitChange();
-    return this.apiClient.getState();
+  // The F95 API integration was removed; delete a key stored by an earlier version.
+  async removeLegacyApiKey() {
+    await fs.unlink(path.join(this.userDataPath, "f95-api-key.bin")).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
   }
 
-  async testApiConnection() {
-    await this.apiClient.queue;
-    this.apiClient.reset();
-    try { await this.apiClient.request("/v1/threads", { limit: 1 }); }
-    finally { this.emitChange(); }
-    return this.apiClient.getState();
+  // Scrapes the thread page through the logged-in F95Zone session.
+  async loadThread(url, details = {}) {
+    if (!(await this.getAuthState()).loggedIn) throw new Error("Please log in to F95Zone first.");
+    const thread = await this.fetcher.fetchThread(url);
+    return this.parseThreadWithLogging(thread.html, thread.url, details);
   }
 
   async importDataFromFile(filePath) {
@@ -238,7 +229,7 @@ class AppService {
   async addThread(threadUrl) {
     const normalizedUrl = normalizeThreadUrl(threadUrl);
     await this.logger.info("Adding thread.", { threadUrl: normalizedUrl });
-    const parsed = await this.dataSource.load(normalizedUrl, {
+    const parsed = await this.loadThread(normalizedUrl, {
       action: "add_thread",
       threadUrl: normalizedUrl
     });
@@ -259,12 +250,12 @@ class AppService {
     }
     await this.logger.info("Refreshing game.", { gameId: Number(gameId), title: game.title });
     try {
-      const parsed = await this.dataSource.load(game.threadUrl, {
+      const parsed = await this.loadThread(game.threadUrl, {
         action: "refresh_game",
         gameId: game.id,
         title: game.title
       });
-      if (parsed.dataSource !== "api" && !this.hasThreadChanges(refreshMetadata, parsed)) {
+      if (!this.hasThreadChanges(refreshMetadata, parsed)) {
         await this.db.markSyncSuccess(game.id, parsed.warnings || []);
         await this.logger.info("Game refresh detected no thread changes.", {
           gameId: game.id,
@@ -354,33 +345,9 @@ class AppService {
   async refreshAllGames() {
     await this.logger.info("Refreshing all games.");
     const games = this.db.getGames();
-    const summaries = new Map();
-    if (this.apiKeyStore.key) {
-      try {
-        for (let offset = 0; offset < games.length; offset += 25) {
-          const batch = games.slice(offset, offset + 25);
-          const result = await this.apiClient.request("/v1/threads/batch", { ids: batch.map((game) => game.threadId).join(",") });
-          if (!Array.isArray(result.items)) throw new Error("F95 API returned an invalid batch response.");
-          for (const item of result.items) summaries.set(String(item.thread_id), item);
-        }
-      } catch (error) {
-        for (const game of games) await this.db.markSyncFailure(game.id, error.message);
-        this.emitChange();
-        throw error;
-      }
-    }
     for (const game of games) {
       try {
-        const summary = summaries.get(String(game.threadId));
-        const metadata = this.db.getGameRefreshMetadata(game.id);
-        const fresh = Date.now() - Date.parse(game.apiDetailCheckedAt) < 24 * 60 * 60 * 1000;
-        if (summary && game.dataSource === "api" && fresh &&
-            metadata.parserDebug?.apiSummaryFingerprint === summaryFingerprint(summary)) {
-          await this.db.markSyncSuccess(game.id, metadata.parserWarnings);
-          continue;
-        }
         await this.refreshGame(game.id);
-        if (summary && this.db.getGameById(game.id).dataSource === "api") await this.db.saveApiSummary(game.id, summaryFingerprint(summary));
       } catch (error) {
         await this.logger.warn("Background refresh skipped failed game.", {
           gameId: game.id,
@@ -425,8 +392,8 @@ class AppService {
 
     return {
       ...parsedThread,
-      bannerImage: bannerImage || (parsedThread.dataSource === "api" ? existingAssets?.bannerImage : null) || null,
-      screenshotImages: screenshotImages.length || parsedThread.dataSource !== "api" ? screenshotImages : existingAssets?.screenshotImages || [],
+      bannerImage,
+      screenshotImages,
       warnings
     };
   }
@@ -580,7 +547,6 @@ class AppService {
     this.stopBackupScheduler();
     this.extractionAbort?.abort();
     this.fetcher.abort?.();
-    this.apiClient.abort();
     for (const controller of this.activeDownloadControllers.values()) controller.abort();
     await this.logger.info("Disposing application service.");
     if (this.activeExtractionHandle?.terminate) {
@@ -786,10 +752,6 @@ for (const [service, names] of Object.entries(delegatedMethods)) {
 }
 
 // Gate top-level operations; nested calls retain the same operation context.
-for (const name of ["setApiKey", "testApiConnection"]) {
-  const operation = AppService.prototype[name];
-  AppService.prototype[name] = async function (...args) { return this.gate.run(() => operation.apply(this, args)); };
-}
 for (const name of ["bootstrap","getState","updateSettings","exportDataToFile","deleteGame","setInstalledVersion","updateGameFolderVersion","updateGameSeasons","updateGameFolderMetadata","deleteGameFolder","refreshGameFolders","listLaunchExecutables","launchExecutable","moveInstallPathToExpected","addThread","refreshGame","refreshAllGames","deleteArchiveFile","processArchive","resolveArchiveMatch","extractJob","startResolvedDownload","logout","pollManagedFolders","createBackup","syncGameFolders","syncAllManagedFolders","pruneMissingArchiveJobs"]) {
   const operation = AppService.prototype[name];
   AppService.prototype[name] = async function (...args) { return this.gate.run(() => operation.apply(this, args)); };
