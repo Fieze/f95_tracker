@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { app, BrowserWindow, dialog, session } = require("electron");
 const { AppService } = require("./services/appService");
+const { ExtensionBridge } = require("./services/extensionBridge");
 const { Logger } = require("./services/logger");
 const {
   ctx,
@@ -87,6 +88,25 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ctx.pageLoader = createBrowserPageLoader({ partition: AUTH_PARTITION, session: authSession, logger: ctx.logger });
   ctx.appService.fetcher.setPageLoader((url, options) => ctx.pageLoader.load(url, options));
   await ctx.appService.initialize();
+  ctx.extensionBridge = new ExtensionBridge({
+    appService: ctx.appService,
+    userDataPath: app.getPath("userData"),
+    logger: ctx.logger.child("extension"),
+    confirmPair: async () => {
+      restoreMainWindow();
+      const { response } = await dialog.showMessageBox(ctx.mainWindow, {
+        type: "question",
+        buttons: ["Allow", "Deny"],
+        defaultId: 1,
+        cancelId: 1,
+        title: "Browser extension",
+        message: "Allow the Firefox extension to connect?",
+        detail: "It will be able to see which threads you track and add new ones. Only allow this if you just installed the F95 Tracker extension."
+      });
+      return response === 0;
+    }
+  });
+  await ctx.extensionBridge.start();
   bindIpc();
   createTray();
   await createWindow();
@@ -132,6 +152,7 @@ app.on("before-quit", (event) => {
     stopAutoUpdate();
     await ctx.logger?.info("Application shutting down.");
     ctx.pageLoader?.dispose();
+    await ctx.extensionBridge?.stop();
     await ctx.appService.dispose();
     await Promise.all([ctx.logger, ctx.downloadLogger, ctx.extractionLogger, ctx.parsingLogger].map((entry) => entry?.state.writeQueue));
     shutdownComplete = true;

@@ -15,6 +15,7 @@ const ctx = {
   parsingLogger: null,
   tray: null,
   pageLoader: null,
+  extensionBridge: null,
   isQuitting: false
 };
 

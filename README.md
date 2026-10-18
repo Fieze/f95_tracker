@@ -93,6 +93,14 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 - Export the full app snapshot to a file.
 - Import a previously exported snapshot back into the app.
 
+### Firefox Extension
+
+`extensions/firefox` contains a companion extension. On F95Zone thread pages it shows a small overlay that tells you whether the thread is already tracked and otherwise offers "Add to tracker".
+
+- The app runs a bridge on `127.0.0.1` (first free port from 47950 to 47959, loopback only). The extension finds it by itself.
+- On first use the overlay shows "Connect to F95 Tracker"; the app then asks you to allow the extension once. After that every request carries a token, the Host must be a loopback name and the Origin must be a browser extension.
+- Try it: open `about:debugging` in Firefox, choose "This Firefox" > "Load Temporary Add-on" and select `extensions/firefox/manifest.json`. The app must be running.
+
 ## Typical Workflow
 
 1. Log in to F95Zone from inside the app.

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "F95 Tracker Companion",
+  "version": "0.1.0",
+  "description": "Adds F95Zone game threads to the F95 Tracker desktop app with one click.",
+  "icons": { "128": "icons/icon.png" },
+  "browser_specific_settings": {
+    "gecko": { "id": "f95-tracker-companion@f95tracker.app", "strict_min_version": "109.0" }
+  },
+  "permissions": ["storage", "http://127.0.0.1/*"],
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["https://f95zone.to/threads/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
