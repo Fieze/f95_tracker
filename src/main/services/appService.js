@@ -8,6 +8,7 @@ const { DatabaseService } = require("./db");
 const { archiveHasSingleRootDirectory, extractArchiveWithProgress, testArchive } = require("./extractor");
 const { FolderWatcher, hashFile } = require("./folderWatcher");
 const { extractVersionFromFilename, findBestGameMatch } = require("./matcher");
+const { parseReleaseName } = require("./releaseNames");
 const { parseThread } = require("./parser");
 const { SyncScheduler } = require("./syncScheduler");
 const { ThreadFetcher } = require("./threadFetcher");
@@ -19,6 +20,7 @@ const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 const ASSET_DOWNLOAD_CONCURRENCY = 4;
 const FINISHED_ACTIVITY_VISIBLE_MS = 4000;
+const SPLIT_ARCHIVE_MESSAGE = "Split archives (multi-part downloads) are not supported by this app. Join and extract them yourself.";
 const ARCHIVE_PATTERN = /\.(zip|rar|7z)$/i;
 
 class AppService {
@@ -333,7 +335,7 @@ class AppService {
 
   // Adds an existing game folder (to a library game or a new one from a thread URL) in the background.
   // The folder is validated right away so mistakes show up in the dialog; moving and importing report in the status line.
-  async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "", version = "" } = {}) {
+  async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "", version = "", branch = "" } = {}) {
     if (!["keep", "move"].includes(mode)) throw new Error("Unknown option for the folder.");
     let existingGame = null;
     let normalizedUrl = "";
@@ -354,7 +356,7 @@ class AppService {
       try {
         const game = existingGame || (await this.addThread(normalizedUrl));
         this.updateActivity(activityId, { label: `${verb} folder ${source.folderName} to ${game.title}` });
-        await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode, version });
+        await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode, version, branch });
         const moved = mode === "move" && !(await this.assetExists(source.folderPath));
         this.finishActivity(activityId, { message: `${moved ? "Moved" : "Added"} ${source.folderName} (${game.title})` });
       } catch (error) {
@@ -380,17 +382,23 @@ class AppService {
       const stats = await fs.stat(resolved).catch(() => null);
       const kind = stats?.isDirectory() ? "folder" : stats?.isFile() && ARCHIVE_PATTERN.test(name) ? "archive" : "unsupported";
       let game = null;
+      let match = { confidence: "" };
       if (kind !== "unsupported") {
-        const match = findBestGameMatch(name, games);
+        match = findBestGameMatch(name, games);
         const best = match.bestMatch;
         if (best && (match.kind === "matched" || best.score >= 30)) game = games.find((entry) => entry.id === best.gameId) || null;
       }
+      const release = kind === "unsupported" ? null : parseReleaseName(name);
       items.push({
         path: resolved,
         name,
         kind,
         gameId: game ? game.id : null,
-        version: kind === "unsupported" ? null : extractVersionFromFilename(name, game || {})
+        confidence: game ? match.confidence : "",
+        version: kind === "unsupported" ? null : extractVersionFromFilename(name, game || {}),
+        branch: release?.branch || null,
+        variant: release?.variant || "",
+        split: Boolean(release?.split)
       });
     }
     return items;
@@ -398,10 +406,11 @@ class AppService {
 
   // Registers an archive from anywhere on disk for a game (existing or new from a thread URL). With `extract` it is
   // also unpacked into the install root. The original file is never deleted or moved.
-  async addDroppedArchiveInBackground({ archivePath, gameId = null, threadUrl = "", version = "", extract = false } = {}) {
+  async addDroppedArchiveInBackground({ archivePath, gameId = null, threadUrl = "", version = "", branch = "", extract = false } = {}) {
     const resolved = path.resolve(String(archivePath || ""));
     if (!path.isAbsolute(String(archivePath || "")) || !ARCHIVE_PATTERN.test(resolved)) throw new Error("Only ZIP, RAR and 7z archives can be added.");
     if (!(await fs.stat(resolved).catch(() => null))?.isFile()) throw new Error("The selected archive does not exist.");
+    if (parseReleaseName(path.basename(resolved)).split) throw new Error(SPLIT_ARCHIVE_MESSAGE);
     let existingGame = null;
     let normalizedUrl = "";
     if (gameId) {
@@ -426,7 +435,7 @@ class AppService {
         this.keepSourceArchives.add(key);
         const job = await this.processArchive({
           archivePath: resolved, archiveName: name, archiveHash, gameId: game.id,
-          detectedVersion: sanitizeVersion(version) || null, autoExtract: Boolean(extract)
+          detectedVersion: sanitizeVersion(version) || null, branch: String(branch || "").trim() || null, autoExtract: Boolean(extract)
         });
         this.finishActivity(activityId, {
           message: extract && job?.status !== "processed" ? `Extracting ${name} (${game.title})` : `Added archive ${name} (${game.title})`
@@ -964,6 +973,7 @@ const delegatedMethods = {
     "resolveFolderReference",
     "updateGameFolderVersion",
     "updateGameSeasons",
+    "updateGameBranches",
     "updateGameFolderMetadata",
     "deleteGameFolder",
     "refreshGameFolders",

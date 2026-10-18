@@ -12,6 +12,40 @@ function folderNameOf(folderPath) {
   return String(folderPath || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
 }
 
+// Version suggestions for the dropdown (a datalist): the changelog / history versions of the game, the ones of the
+// given chapter / season first. Typing a version that is not listed still works.
+function fillVersionOptions(game, branch) {
+  const list = $("#version-options");
+  list.innerHTML = "";
+  const options = (game?.versionOptions || []).slice().sort((left, right) =>
+    Number(right.branch === (branch || null)) - Number(left.branch === (branch || null))
+  );
+  const seen = new Set();
+  options.forEach((entry) => {
+    if (branch && entry.branch && entry.branch !== branch) return;
+    if (seen.has(entry.version)) return;
+    seen.add(entry.version);
+    list.appendChild(new Option(entry.branch && !branch ? `${entry.version} (${entry.branch})` : "", entry.version));
+  });
+}
+
+function fillBranchOptions(game) {
+  const list = $("#branch-options");
+  list.innerHTML = "";
+  (game?.branches || []).forEach((label) => list.appendChild(new Option("", label)));
+}
+
+// Snaps a version guessed from a file name to the closest entry of the game's version list.
+function snapVersionToOptions(game, guess) {
+  const key = (value) => String(value || "").toLowerCase().replace(/^v(?:ersion)?s*/, "").replace(/[^a-z0-9]+/g, "");
+  const wanted = key(guess);
+  if (!wanted) return "";
+  const versions = (game?.versionOptions || []).map((entry) => entry.version);
+  return versions.find((version) => key(version) === wanted)
+    || versions.find((version) => key(version).startsWith(wanted) || wanted.startsWith(key(version)))
+    || guess;
+}
+
 function populateAddFolderGames() {
   const select = $("#add-folder-form").elements.gameId;
   const previous = select.value;

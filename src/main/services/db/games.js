@@ -1,4 +1,5 @@
 // Game rows, sync bookkeeping and hydration. Mixed into DatabaseService (see ../db.js).
+const { buildBranchInfo } = require("../releaseNames");
 const { deriveInstalledStateFromFolders, extractThreadId, safeJsonParse, versionLabel } = require("../utils");
 
 module.exports = {
@@ -102,12 +103,12 @@ module.exports = {
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [game.id]);
 
     const linkStmt = this.db.prepare(`
-      INSERT INTO download_links (game_id, group_label, label, url, last_seen_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO download_links (game_id, group_label, label, url, last_seen_at, branch, variant, platform, branch_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     parsedThread.downloadGroups.forEach((group) => {
       group.links.forEach((link) => {
-        linkStmt.run([game.id, group.label, link.label, link.url, new Date().toISOString()]);
+        linkStmt.run([game.id, group.label, link.label, link.url, new Date().toISOString(), group.branch || null, group.variant || null, group.platform || null, group.branchVersion || null]);
       });
     });
     linkStmt.free();
@@ -198,14 +199,14 @@ module.exports = {
     }
 
     const links = this.query(
-      "SELECT group_label, label, url FROM download_links WHERE game_id = ? ORDER BY group_label, label, url",
+      "SELECT group_label, label, url, branch, variant, platform, branch_version FROM download_links WHERE game_id = ? ORDER BY group_label, label, url",
       [gameId]
     );
     const downloadGroups = [];
     links.forEach((link) => {
       let group = downloadGroups.find((entry) => entry.label === (link.group_label || "Downloads"));
       if (!group) {
-        group = { label: link.group_label || "Downloads", links: [] };
+        group = { label: link.group_label || "Downloads", branch: link.branch || null, variant: link.variant || "", platform: link.platform || "", branchVersion: link.branch_version || null, links: [] };
         downloadGroups.push(group);
       }
       group.links.push({
@@ -230,6 +231,17 @@ module.exports = {
         : null,
       screenshotImages: safeJsonParse(row.screenshot_images, [])
     };
+  },
+
+  getBranchOverrides(gameId) {
+    const row = this.first("SELECT branch_overrides FROM games WHERE id = ?", [gameId]);
+    return { added: [], removed: [], final: [], aliasBranches: {}, ...safeJsonParse(row?.branch_overrides, {}) };
+  },
+
+  async saveBranchOverrides(gameId, overrides) {
+    this.db.run("UPDATE games SET branch_overrides = ? WHERE id = ?", [JSON.stringify(overrides), gameId]);
+    await this.persist();
+    return this.getGameById(gameId);
   },
 
   async updateGameSeasons(gameId, hasSeasons) {
@@ -289,7 +301,7 @@ module.exports = {
     for (const link of links) {
       let group = groups.find((entry) => entry.label === (link.group_label || "Downloads"));
       if (!group) {
-        group = { label: link.group_label || "Downloads", links: [] };
+        group = { label: link.group_label || "Downloads", branch: link.branch || null, variant: link.variant || "", platform: link.platform || "", branchVersion: link.branch_version || null, links: [] };
         groups.push(group);
       }
       group.links.push({
@@ -302,6 +314,18 @@ module.exports = {
     const hydratedFolders = (folders || []).map((folder) => this.hydrateFolder(folder));
     const derived = deriveInstalledStateFromFolders(hydratedFolders, {
       installPath: row.install_path || null
+    });
+
+    const parserDebug = safeJsonParse(row.parser_debug, {});
+    const history = this.listGameHistory(row.id);
+    const branchInfo = buildBranchInfo({
+      titleBranches: parserDebug.titleBranches || [],
+      currentVersion: row.current_version,
+      changelog: row.changelog,
+      historyVersions: history.map((entry) => entry.version),
+      groups,
+      folders: hydratedFolders,
+      overrides: safeJsonParse(row.branch_overrides, {})
     });
 
     return {
@@ -342,7 +366,9 @@ module.exports = {
       parserWarnings: safeJsonParse(row.parser_warnings, []),
       downloadGroups: groups,
       folders: hydratedFolders,
-      history: this.listGameHistory(row.id),
+      history,
+      branchOverrides: safeJsonParse(row.branch_overrides, {}),
+      ...branchInfo,
       lastSyncAt: row.last_sync_at,
       lastSyncStatus: row.last_sync_status
     };

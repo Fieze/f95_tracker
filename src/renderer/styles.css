@@ -2266,3 +2266,53 @@ textarea::placeholder {
   width: 14rem;
   padding: 8px 12px;
 }
+
+/* ---- Chapters & seasons ---- */
+.branch-list {
+  display: grid;
+  gap: 10px;
+}
+
+.branch-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.branch-info {
+  display: grid;
+  gap: 2px;
+}
+
+.branch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.branch-final {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.branch-final input {
+  width: auto;
+}
+
+.branch-add {
+  display: flex;
+  gap: 8px;
+}
+
+.job-version-input {
+  min-width: 0;
+  width: 140px;
+}

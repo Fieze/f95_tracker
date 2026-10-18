@@ -320,3 +320,21 @@ test("shutdown drain waits for an import already committing data", async () => {
   release(); await importWork; await drain;
   assert.equal(drained, true);
 });
+
+test("an archive for a chapter is installed in that chapter's sub-folder", async (t) => {
+  const f = await fixture(t);
+  f.app.archiveHasSingleRootDirectory = async () => true;
+  f.app.extractArchiveWithProgress = (source, target) => ({ completion: (async () => {
+    await fs.mkdir(path.join(target, "original"));
+    await fs.writeFile(path.join(target, "original", "game.exe"), "chapter build");
+  })(), terminate: async () => {} });
+  const job = await archive(f, "chapter.zip");
+  await f.app.db.updateArchiveJob(job.id, { branch: "Chapter 2" });
+  await f.app.extractJob(job.id, f.game.id, "0.5");
+  await f.app.archiveQueue.waitIdle();
+  const expected = path.join(f.gameRoot, "Chapter 2", "Safety Game-0.5");
+  assert.equal(await fs.readFile(path.join(expected, "game.exe"), "utf8"), "chapter build");
+  const folder = f.app.db.findGameFolderByPath(f.game.id, expected);
+  assert.equal(folder.branch, "Chapter 2");
+  assert.equal(folder.version, "0.5");
+});

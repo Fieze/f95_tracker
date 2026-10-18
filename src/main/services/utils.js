@@ -123,6 +123,11 @@ function sanitizePathSegment(value) {
     .replace(/[. ]+$/g, "") || "game";
 }
 
+// Chapters, seasons and specials live in their own sub-folder below the game's folder.
+function buildBranchDirectory(gameDirectory, branch) {
+  return branch ? path.join(gameDirectory, sanitizePathSegment(branch)) : gameDirectory;
+}
+
 function buildVersionedInstallDirectory(installRoot, gameTitle, version) {
   return path.join(installRoot, sanitizePathSegment(`${gameTitle}-${version}`));
 }
@@ -436,6 +441,7 @@ function rankLaunchExecutables(executables, game = {}) {
 }
 
 module.exports = {
+  buildBranchDirectory,
   buildInstallDirectory,
   buildGameRootCandidates,
   buildLegacyInstallDirectory,

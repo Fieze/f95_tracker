@@ -133,3 +133,18 @@ test("hasSingleRootDirectory detects whether an archive unwraps into one folder"
     false
   );
 });
+
+test("a chapter or season tag in the name does not stop the game from matching", () => {
+  const games = [
+    { id: 1, title: "Dating My Daughter", aliases: [], currentVersion: "1.01" },
+    { id: 2, title: "Dating My Roommate", aliases: [], currentVersion: "0.3" }
+  ];
+  const match = findBestGameMatch("Dating_My_Daughter_Ch2_v0.5_Win_HQ.zip", games);
+  assert.equal(match.bestMatch.gameId, 1);
+  assert.equal(match.bestMatch.version, "0.5");
+});
+
+test("a misspelled title still matches and the confirmed title is learned as an alias", () => {
+  const games = [{ id: 1, title: "Lust Academy", aliases: [], currentVersion: "4.10" }, { id: 2, title: "Other Game", aliases: [], currentVersion: "1.0" }];
+  assert.equal(findBestGameMatch("Lust_Akademy_S4_v4.10.zip", games).bestMatch.gameId, 1);
+});

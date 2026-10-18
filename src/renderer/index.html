@@ -248,6 +248,9 @@
       </form>
     </section>
 
+    <datalist id="version-options"></datalist>
+    <datalist id="branch-options"></datalist>
+
     <section id="drop-import-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="drop-import-title">
       <div class="overlay-panel-header">
         <div>
@@ -261,15 +264,22 @@
         <label>
           Game
           <select name="gameId"></select>
+          <small id="drop-import-hint" class="field-hint"></small>
         </label>
         <label id="drop-import-url-label">
           Thread URL
           <input name="threadUrl" type="url" placeholder="https://f95zone.to/threads/..." />
         </label>
         <label>
-          Version
-          <input name="version" type="text" placeholder="e.g. 0.5.2" />
+          Chapter / season
+          <input name="branch" type="text" list="branch-options" placeholder="None (whole game)" />
+          <small class="field-hint">Chapters, seasons and specials get their own sub-folder.</small>
         </label>
+        <label>
+          Version
+          <input name="version" type="text" list="version-options" placeholder="Pick from the changelog or type a version" />
+        </label>
+        <p id="drop-import-split-warning" class="overlay-hint hidden">This looks like a split archive. The app does not support split archives; join and extract the parts yourself.</p>
         <fieldset class="folder-mode" id="drop-import-mode">
           <legend>What should happen to the folder?</legend>
           <label class="radio-option">
@@ -327,7 +337,7 @@
           <h5 class="content-heading">Version</h5>
           <label>
             Version Number
-            <input id="edit-folder-version" type="text" placeholder="Enter version" />
+            <input id="edit-folder-version" type="text" list="version-options" placeholder="Pick from the changelog or type a version" />
           </label>
           <button id="edit-folder-use-current" class="secondary" type="button">Use Current Version</button>
         </div>
@@ -442,6 +452,10 @@
           </div>
         </div>
         <div class="developer-links hidden"></div>
+        <div class="content-block" data-section="branches">
+          <h5 class="content-heading">Chapters &amp; Seasons</h5>
+          <div class="branch-list"></div>
+        </div>
         <div class="content-block" data-section="installations">
           <h5 class="content-heading">Installations</h5>
           <div class="install-folders"></div>
@@ -511,6 +525,7 @@
     <script src="./library-details.js"></script>
     <script src="./activities.js"></script>
     <script src="./status-line.js"></script>
+    <script src="./branches-panel.js"></script>
     <script src="./add-folder.js"></script>
     <script src="./drop-import.js"></script>
     <script src="./overlay-focus.js"></script>

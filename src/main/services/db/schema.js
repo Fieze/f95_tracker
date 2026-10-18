@@ -124,6 +124,13 @@ module.exports = {
     this.ensureColumn("games", "has_seasons", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("game_folders", "season_number", "INTEGER");
     this.ensureColumn("game_folders", "season_final", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("game_folders", "branch", "TEXT");
+    this.ensureColumn("games", "branch_overrides", "TEXT DEFAULT '{}'");
+    this.ensureColumn("download_links", "branch", "TEXT");
+    this.ensureColumn("download_links", "variant", "TEXT");
+    this.ensureColumn("download_links", "platform", "TEXT");
+    this.ensureColumn("download_links", "branch_version", "TEXT");
+    this.ensureColumn("archive_jobs", "branch", "TEXT");
     this.ensureColumn("game_folders", "preferred_exe_path", "TEXT");
     this.ensureColumn("game_folders", "sort_rank", "INTEGER");
     this.backfillThreadIds();

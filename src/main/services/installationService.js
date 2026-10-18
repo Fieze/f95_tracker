@@ -2,7 +2,8 @@ const fs = require("fs/promises");
 const path = require("path");
 const { assertNoLinks, assertSafeTree, assertManagedInstallPath, isWithin } = require("./safeFiles");
 const { extractVersionFromFilename } = require("./matcher");
-const { buildGameRootCandidates, buildInstallDirectory, isExpectedGameInstallPath, rankLaunchExecutables, sanitizePathSegment, sanitizeVersion } = require("./utils");
+const { branchLabelOfWholeName } = require("./releaseNames");
+const { buildBranchDirectory, buildGameRootCandidates, buildInstallDirectory, isExpectedGameInstallPath, rankLaunchExecutables, sanitizePathSegment, sanitizeVersion } = require("./utils");
 const pathKey = (value) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
 
 // Shared application state and facade calls are supplied by AppService.
@@ -110,6 +111,42 @@ class InstallationService {
     await this.app.db.applyDerivedInstallState(game.id, folders, {
       installPath: updatedGame.installPath || null
     });
+    this.app.emitChange();
+    return this.app.db.getGameById(game.id);
+  }
+
+  // Manual branch management: add a chapter / season / special, remove or rename one that has no installed folders,
+  // or mark a branch as final (finished branches are skipped by update checks).
+  async updateGameBranches(gameId, { action, label = "", newLabel = "", final = true } = {}) {
+    const game = this.app.db.getGameById(Number(gameId));
+    if (!game) throw new Error("Game not found.");
+    const clean = (value) => sanitizePathSegment(String(value || "").trim()).slice(0, 40);
+    const target = clean(label);
+    if (!target) throw new Error("A chapter or season name is required.");
+    const overrides = this.app.db.getBranchOverrides(game.id);
+    const without = (list, value) => (list || []).filter((entry) => entry !== value);
+    const hasFolders = (value) => game.folders.some((folder) => folder.branch === value);
+
+    if (action === "add") {
+      overrides.added = [...without(overrides.added, target), target];
+      overrides.removed = without(overrides.removed, target);
+    } else if (action === "remove" || action === "rename") {
+      if (hasFolders(target)) throw new Error(`"${target}" still has installed folders. Remove or move them first.`);
+      overrides.added = without(overrides.added, target);
+      overrides.final = without(overrides.final, target);
+      overrides.removed = [...without(overrides.removed, target), target];
+      if (action === "rename") {
+        const renamed = clean(newLabel);
+        if (!renamed) throw new Error("A new name is required.");
+        overrides.added = [...without(overrides.added, renamed), renamed];
+        overrides.removed = without(overrides.removed, renamed);
+      }
+    } else if (action === "final") {
+      overrides.final = final ? [...without(overrides.final, target), target] : without(overrides.final, target);
+    } else {
+      throw new Error("Unknown branch action.");
+    }
+    await this.app.db.saveBranchOverrides(game.id, overrides);
     this.app.emitChange();
     return this.app.db.getGameById(game.id);
   }
@@ -459,7 +496,7 @@ class InstallationService {
 
   // Registers an existing game folder for a game, optionally moving it into <install root>/<game title>/.
   // An explicit `version` (typed or confirmed by the user) wins over the one inferred from the folder name.
-  async addExistingFolder({ folderPath, gameId, mode = "keep", version: explicitVersion = "" }) {
+  async addExistingFolder({ folderPath, gameId, mode = "keep", version: explicitVersion = "", branch = "" }) {
     const game = this.app.db.getGameById(Number(gameId));
     if (!game) throw new Error("Game not found.");
     const source = await this.app.validateExistingFolder(folderPath, mode, game);
@@ -471,9 +508,10 @@ class InstallationService {
       this.app.assertGameIdle(game.id);
       const installRoot = this.app.db.getSettings().installRoot;
       const gameRoot = await this.app.ensureGameRootForGame(game);
-      const destination = path.join(gameRoot, source.folderName);
+      const destination = path.join(buildBranchDirectory(gameRoot, branch), source.folderName);
       if (!isWithin(installRoot, destination)) throw new Error("Move is only allowed inside the configured install root.");
       await assertNoLinks(destination);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
       if (await this.app.assetExists(destination)) {
         throw new Error(`"${source.folderName}" already exists in the game's install folder.`);
       }
@@ -498,7 +536,8 @@ class InstallationService {
       installedVersion: game.installedVersion
     });
     await this.app.db.upsertGameFolder(game.id, {
-      folderName: source.folderName, folderPath: finalPath, version, versionSource: manualVersion ? "manual" : "inferred"
+      folderName: source.folderName, folderPath: finalPath, version, versionSource: manualVersion ? "manual" : "inferred",
+      branch: branch || null
     });
     await this.app.syncGameFolders(game.id, { game: this.app.db.getGameById(game.id), rootOverride });
     this.app.emitChange();
@@ -552,7 +591,17 @@ class InstallationService {
     const discovered = new Map();
     for (const candidate of rootCandidates) {
       try {
-        for (const entry of await this.app.listDirectSubdirectories(candidate)) discovered.set(pathKey(entry.folderPath), entry);
+        for (const entry of await this.app.listDirectSubdirectories(candidate)) {
+          // A sub-folder that is nothing but a chapter / season / special name holds the version folders of that branch.
+          const branch = branchLabelOfWholeName(entry.folderName);
+          if (!branch) {
+            discovered.set(pathKey(entry.folderPath), entry);
+            continue;
+          }
+          for (const child of await this.app.listDirectSubdirectories(entry.folderPath)) {
+            discovered.set(pathKey(child.folderPath), { ...child, branch });
+          }
+        }
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
       }
@@ -579,6 +628,7 @@ class InstallationService {
         versionSource: isManual ? "manual" : "inferred",
         seasonNumber: existing?.seasonNumber ?? null,
         seasonFinal: existing?.seasonFinal ?? false,
+        branch: entry.branch ?? existing?.branch ?? null,
         preferredExePath: existing?.preferredExePath ?? null,
         createdAt: existing?.createdAt,
         updatedAt: existing?.updatedAt
@@ -592,6 +642,7 @@ class InstallationService {
       versionSource: folder.versionSource,
       seasonNumber: folder.seasonNumber,
       seasonFinal: folder.seasonFinal,
+      branch: folder.branch,
       sortRank: folder.sortRank
     }));
     const beforeGame = this.app.db.getGameById(game.id);
@@ -619,6 +670,7 @@ class InstallationService {
       versionSource: folder.versionSource,
       seasonNumber: folder.seasonNumber,
       seasonFinal: folder.seasonFinal,
+      branch: folder.branch,
       sortRank: folder.sortRank
     }));
 
@@ -667,7 +719,10 @@ class InstallationService {
 
   resolveGameRootPath(game, installRoot) {
     if (game.folders?.length) {
-      return path.dirname(game.folders[0].folderPath);
+      const first = game.folders[0];
+      const parent = path.dirname(first.folderPath);
+      // Version folders of a chapter / season sit one level deeper, in the branch folder.
+      return first.branch && branchLabelOfWholeName(path.basename(parent)) ? path.dirname(parent) : parent;
     }
 
     if (!game.installPath) {

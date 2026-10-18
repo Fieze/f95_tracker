@@ -1,6 +1,6 @@
 // Drag & drop import: folders and archives dropped onto the window open this dialog, one item at a time.
 // Uses the shared state and helpers declared in renderer-app.js and add-folder.js.
-const dropImport = { queue: [], current: null, versionEdited: false };
+const dropImport = { queue: [], current: null, versionEdited: false, branchEdited: false };
 
 function populateDropImportGames(selectedId) {
   const select = $("#drop-import-form").elements.gameId;
@@ -24,15 +24,24 @@ function updateDropImportForm() {
   form.elements.threadUrl.required = !game;
   $("#drop-import-mode").classList.toggle("hidden", !isFolder);
   $("#drop-import-extract").classList.toggle("hidden", isFolder);
-  $("#drop-import-extract").disabled = !installRoot;
+  $("#drop-import-extract").disabled = !installRoot || item.split;
   $("#drop-import-extract").title = installRoot ? "" : "Set an install root in Settings to enable extracting.";
+  $("#drop-import-add").disabled = Boolean(item.split);
+  $("#drop-import-split-warning").classList.toggle("hidden", !item.split);
+  fillBranchOptions(game);
+  fillVersionOptions(game, form.elements.branch.value.trim() || null);
 
   const moveOption = form.querySelector("input[name='mode'][value='move']");
   moveOption.disabled = !installRoot;
   if (!installRoot && moveOption.checked) form.querySelector("input[name='mode'][value='keep']").checked = true;
   $("#drop-import-destination").textContent = !installRoot
     ? "Set an install root in Settings to enable moving."
-    : `${installRoot.replace(/[\\/]+$/, "")}\\${game ? sanitizeFolderSegment(game.title) : "<game title>"}\\${item.name}`;
+    : [
+      installRoot.replace(/[\\/]+$/, ""),
+      game ? sanitizeFolderSegment(game.title) : "<game title>",
+      form.elements.branch.value.trim() && sanitizeFolderSegment(form.elements.branch.value),
+      item.name
+    ].filter(Boolean).join("\\");
 }
 
 function showDropImportItem() {
@@ -43,8 +52,14 @@ function showDropImportItem() {
 
   form.reset();
   dropImport.versionEdited = false;
+  dropImport.branchEdited = false;
   populateDropImportGames(item.gameId);
-  form.elements.version.value = item.version || "";
+  const game = state.games.find((entry) => entry.id === item.gameId);
+  form.elements.branch.value = item.branch || "";
+  $("#drop-import-hint").textContent = item.gameId
+    ? `Suggested from the name (${item.confidence === "high" ? "high" : "low"} confidence). Please check it.`
+    : "No library game matches this name.";
+  form.elements.version.value = snapVersionToOptions(game, item.version || "");
   $("#drop-import-eyebrow").textContent = remaining ? `Import · ${remaining} more waiting` : "Import";
   $("#drop-import-title").textContent = isFolder ? "Add Dropped Folder" : "Add Dropped Archive";
   $("#drop-import-source").textContent = item.path;
@@ -105,7 +120,8 @@ async function handleDropImportSubmit(event) {
     const common = {
       gameId: form.elements.gameId.value || null,
       threadUrl: form.elements.threadUrl.value.trim(),
-      version: form.elements.version.value.trim()
+      version: form.elements.version.value.trim(),
+      branch: form.elements.branch.value.trim()
     };
     // The check happens right away; moving, extracting and importing continue in the background (status line).
     const result = item.kind === "folder"
@@ -133,7 +149,10 @@ async function handleDropImportGameChange() {
   if (!item || dropImport.versionEdited) return;
   try {
     const result = await window.f95App.inferInstalledVersion(item.name);
-    if (dropImport.current === item && !dropImport.versionEdited) $("#drop-import-form").elements.version.value = result?.inferredVersion || "";
+    const game = state.games.find((entry) => String(entry.id) === $("#drop-import-form").elements.gameId.value);
+    if (dropImport.current === item && !dropImport.versionEdited) {
+      $("#drop-import-form").elements.version.value = snapVersionToOptions(game, result?.inferredVersion || "");
+    }
   } catch {
     // The guess is only a convenience.
   }
@@ -144,6 +163,7 @@ function initDropImport() {
   form.addEventListener("submit", handleDropImportSubmit);
   form.elements.gameId.addEventListener("change", handleDropImportGameChange);
   form.elements.version.addEventListener("input", () => { dropImport.versionEdited = true; });
+  form.elements.branch.addEventListener("input", () => { dropImport.branchEdited = true; });
   form.addEventListener("change", updateDropImportForm);
   $("#drop-import-skip").addEventListener("click", advanceDropImport);
   window.f95App.onFilesDropped(handleFilesDropped);

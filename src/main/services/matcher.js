@@ -1,5 +1,6 @@
 const path = require("path");
 const { safeJsonParse, sanitizeVersion, slugify } = require("./utils");
+const { parseReleaseName } = require("./releaseNames");
 
 function normalizeVersionCandidate(value) {
   return sanitizeVersion(String(value || "").replace(/\s+/g, " ").trim())
@@ -269,13 +270,30 @@ function chooseKnownVersionLabel(candidate, options = {}) {
 }
 
 function extractVersionFromFilename(filename, options = {}) {
-  const base = stripArchiveExtension(path.basename(filename));
+  // Underscores are word characters for , so "Game_v0.5_Win" needs them as spaces; "1_0_2" style versions keep theirs.
+  const base = stripArchiveExtension(path.basename(filename)).replace(/(?<!d)_|_(?!d)/g, " ");
   const ranked = rankVersionCandidates(base, options);
   if (!ranked[0]) {
     return null;
   }
 
   return chooseKnownVersionLabel(ranked[0], options);
+}
+
+// Dice coefficient over character trigrams: 1 for identical slugs, high for typos and small spelling differences.
+function trigramSimilarity(left, right) {
+  const grams = (value) => {
+    const padded = `  ${value} `;
+    const set = new Set();
+    for (let index = 0; index < padded.length - 2; index += 1) set.add(padded.slice(index, index + 3));
+    return set;
+  };
+  if (!left || !right) return 0;
+  const a = grams(left);
+  const b = grams(right);
+  let shared = 0;
+  a.forEach((gram) => { if (b.has(gram)) shared += 1; });
+  return (2 * shared) / (a.size + b.size);
 }
 
 function tokenizeTitle(value) {
@@ -311,6 +329,19 @@ function scoreGameMatch(filename, game) {
 
   if (haystack.includes(slugify(game.title))) {
     score += 30;
+  }
+
+  // The part of the name in front of chapter / version / variant tags is the title proper; an exact hit is decisive
+  // even when the name carries a chapter or season tag the library title does not.
+  const releaseTitle = slugify(parseReleaseName(filename).title);
+  if (releaseTitle) {
+    const names = [game.title, ...aliases].map((candidate) => slugify(candidate)).filter(Boolean);
+    if (names.includes(releaseTitle)) {
+      score += 25;
+    } else if (names.some((name) => trigramSimilarity(name, releaseTitle) >= 0.8)) {
+      // Typos and small spelling differences ("Lust Akademy") still point at the right game.
+      score += 22;
+    }
   }
 
   return {

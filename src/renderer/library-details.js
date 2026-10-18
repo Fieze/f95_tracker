@@ -246,7 +246,13 @@ function buildGameDetailsCard(selectedGame) {
       info.appendChild(createNode("span", "install-folder-path", folder.folderPath));
       const controls = createNode("div", "install-folder-controls");
       const summary = createNode("div", "install-folder-summary");
-      if (selectedGame.hasSeasons) {
+      if (folder.branch) {
+        const branchMeta = createNode("div", "install-folder-meta");
+        branchMeta.appendChild(createNode("span", "install-folder-meta-heading", "Branch"));
+        branchMeta.appendChild(createNode("span", "install-folder-season-label-display", folder.branch));
+        summary.appendChild(branchMeta);
+      }
+      if (selectedGame.hasSeasons && !folder.branch) {
         const seasonMeta = createNode("div", "install-folder-meta");
         seasonMeta.appendChild(createNode("span", "install-folder-meta-heading", "Season"));
         seasonMeta.appendChild(createNode("span", "install-folder-season-label-display", formatFolderSeasonLabel(folder)));
@@ -352,15 +358,26 @@ function buildGameDetailsCard(selectedGame) {
     warnings.appendChild(createNode("span", "warning-pill", warning));
   });
 
+  renderBranchSection(detailFragment.querySelector("[data-section='branches']"), selectedGame);
+
   (selectedGame.downloadGroups || []).forEach((group) => {
     const wrapper = createNode("div", "download-group");
+    const isSplit = group.variant === "Split";
+    // The newest version of this chapter / season, falling back to the thread's current version.
+    const groupVersion = group.branchVersion || selectedGame.branchLatest?.[group.branch] || selectedGame.currentVersion || "";
     wrapper.appendChild(createNode("strong", "", group.label));
+    if (groupVersion && group.branch) wrapper.appendChild(createNode("small", "download-status", `Latest: ${groupVersion}`));
+    if (isSplit) {
+      wrapper.appendChild(
+        createNode("small", "download-status status-failed", "Split archives are not supported by this app. Open the download page and download the parts yourself.")
+      );
+    }
     (group.links || []).forEach((link) => {
       const row = createNode("div", "download-row");
       const job = getDownloadJobForLink(selectedGame.id, link);
       const status = job?.status || "";
       const busy = ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
-      const supportsDirectDownload = isSupportedDirectDownload(link.url, link.label);
+      const supportsDirectDownload = !isSplit && isSupportedDirectDownload(link.url, link.label);
       const labelWrap = createNode("div", "download-meta");
       const actions = createNode("div", "download-actions");
       const primaryButton = createNode(
@@ -372,7 +389,7 @@ function buildGameDetailsCard(selectedGame) {
         ? createNode("button", "download-button secondary", "Open Host")
         : null;
       labelWrap.appendChild(createNode("span", "", link.label));
-      if (!supportsDirectDownload) {
+      if (!supportsDirectDownload && !isSplit) {
         labelWrap.appendChild(
           createNode("small", "download-status", "Direct download is currently only available for Vikingfile and Pixeldrain.")
         );
@@ -408,7 +425,9 @@ function buildGameDetailsCard(selectedGame) {
             linkId: link.id,
             url: link.url,
             label: link.label,
-            detectedVersion: selectedGame.currentVersion || ""
+            detectedVersion: groupVersion,
+            branch: group.branch || "",
+            variant: group.variant || ""
           });
         } catch (error) {
           alert(error.message);
@@ -473,6 +492,7 @@ function renderGameDetailsPanel() {
 }
 
 const DETAIL_SECTIONS = [
+  ["branches", "Chapters"],
   ["installations", "Installations"],
   ["overview", "Overview"],
   ["genre", "Genre"],
@@ -524,6 +544,7 @@ function renderEditFolderPanel() {
 
   const executableSelect = $("#edit-folder-executable");
   const versionInput = $("#edit-folder-version");
+  fillVersionOptions(game, folder.branch);
   const useCurrentButton = $("#edit-folder-use-current");
   const seasonsCheckbox = $("#edit-folder-seasons-checkbox");
   const seasonFields = $("#edit-folder-season-fields");

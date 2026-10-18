@@ -209,3 +209,48 @@ test("a dropped archive is registered for the game and stays where it is", async
   assert.ok(await exists(archive), "the original archive is untouched");
   await assert.rejects(() => service.addDroppedArchiveInBackground({ archivePath: path.join(dirs.library, "x.txt"), gameId: game.id }), /ZIP, RAR and 7z/);
 });
+
+test("a folder moved with a chapter lands in that chapter's sub-folder and is found again by the folder scan", async (t) => {
+  const { service, game, dirs, makeFolder } = await setup(t);
+  const folder = await makeFolder("Example Game v0.2");
+  const updated = await service.addExistingFolder({ folderPath: folder, gameId: game.id, mode: "move", branch: "Chapter 2" });
+  const expected = path.join(dirs.installRoot, "Example Game", "Chapter 2", "Example Game v0.2");
+  assert.equal(await exists(expected), true);
+  assert.deepEqual(updated.folders.map((entry) => [entry.folderPath, entry.branch]), [[expected, "Chapter 2"]]);
+  assert.equal(updated.hasSeasons, true, "numbered branches turn on the season ordering");
+
+  // A second folder dropped into another branch directory by hand is picked up with its branch.
+  const manual = path.join(dirs.installRoot, "Example Game", "Christmas Special", "Example Game v1.0");
+  await fs.mkdir(manual, { recursive: true });
+  await service.syncGameFolders(game.id);
+  const synced = (await service.getState()).games.find((entry) => entry.id === game.id);
+  assert.deepEqual(
+    synced.folders.map((entry) => entry.branch).sort(),
+    ["Chapter 2", "Christmas Special"]
+  );
+  assert.deepEqual(synced.branches, ["Chapter 2", "Christmas Special"]);
+});
+
+test("a split archive cannot be dropped in", async (t) => {
+  const { service, game, dirs } = await setup(t);
+  const archive = path.join(dirs.library, "Example Game v1.0.part1.rar");
+  await fs.writeFile(archive, "x");
+  await assert.rejects(() => service.addDroppedArchiveInBackground({ archivePath: archive, gameId: game.id }), /Split archives/);
+  const [item] = await service.inspectDroppedPaths([archive]);
+  assert.equal(item.split, true);
+});
+
+test("branches can be added, finished, renamed and removed, and report their update state", async (t) => {
+  const { service, game, makeFolder } = await setup(t);
+  const folder = await makeFolder("Example Game v0.1");
+  await service.addExistingFolder({ folderPath: folder, gameId: game.id, mode: "keep", branch: "Chapter 1" });
+  let updated = await service.updateGameBranches(game.id, { action: "add", label: "Chapter 2" });
+  assert.deepEqual(updated.branches, ["Chapter 1", "Chapter 2"]);
+  updated = await service.updateGameBranches(game.id, { action: "rename", label: "Chapter 2", newLabel: "Chapter 3" });
+  assert.deepEqual(updated.branches, ["Chapter 1", "Chapter 3"]);
+  updated = await service.updateGameBranches(game.id, { action: "final", label: "Chapter 1", final: true });
+  assert.equal(updated.branchStates.find((entry) => entry.branch === "Chapter 1").final, true);
+  await assert.rejects(() => service.updateGameBranches(game.id, { action: "remove", label: "Chapter 1" }), /installed folders/);
+  updated = await service.updateGameBranches(game.id, { action: "remove", label: "Chapter 3" });
+  assert.deepEqual(updated.branches, ["Chapter 1"]);
+});

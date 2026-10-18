@@ -3,7 +3,8 @@ const path = require("path");
 const crypto = require("crypto");
 const { assertNoLinks, assertManagedInstallPath, assertSafeTree, removeStagingDirectory } = require("./safeFiles");
 const { findBestGameMatch } = require("./matcher");
-const { buildInstallDirectory, buildVersionedInstallDirectory, sanitizePathSegment } = require("./utils");
+const { parseReleaseName } = require("./releaseNames");
+const { buildBranchDirectory, buildInstallDirectory, buildVersionedInstallDirectory, sanitizePathSegment, sanitizeVersion, slugify } = require("./utils");
 const EXTRACTION_PROGRESS_EMIT_INTERVAL_MS = 250;
 const EXTRACTION_PROGRESS_LOG_INTERVAL_MS = 5000;
 
@@ -85,7 +86,7 @@ class ArchiveService {
     this.app.processedArchiveRemovalTimers.delete(Number(jobId));
   }
 
-  async processArchive({ archivePath, archiveName, archiveHash, gameId = null, detectedVersion = null, autoExtract = false }) {
+  async processArchive({ archivePath, archiveName, archiveHash, gameId = null, detectedVersion = null, branch = null, autoExtract = false }) {
     await this.app.extractionLogger.info("Processing detected archive.", {
       archiveName,
       archivePath,
@@ -98,6 +99,7 @@ class ArchiveService {
       return existing;
     }
 
+    const release = parseReleaseName(archiveName);
     const games = this.app.db.getGames();
     const match = findBestGameMatch(archiveName, games);
     const forcedGame = gameId ? games.find((entry) => entry.id === Number(gameId)) : null;
@@ -107,8 +109,9 @@ class ArchiveService {
       archiveHash,
       gameId: forcedGame?.id || match.bestMatch?.gameId || null,
       detectedVersion: detectedVersion || match.bestMatch?.version || forcedGame?.currentVersion || null,
+      branch: branch || release.branch || this.learnedBranch(forcedGame || games.find((entry) => entry.id === match.bestMatch?.gameId), release),
       status:
-        forcedGame
+        release.split ? "failed" : forcedGame
           ? "queued"
           : match.kind === "matched"
           ? "queued"
@@ -116,7 +119,8 @@ class ArchiveService {
             ? "needs-review"
             : "unmatched",
       confidence: match.confidence || "low",
-      matchCandidates: match.candidates || []
+      matchCandidates: match.candidates || [],
+      errorText: release.split ? "Split archives (multi-part downloads) are not supported by this app." : null
     };
 
     let job;
@@ -126,10 +130,11 @@ class ArchiveService {
         archiveHash,
         gameId: payload.gameId,
         detectedVersion: payload.detectedVersion,
+        branch: payload.branch,
         status: payload.status,
         confidence: payload.confidence,
         matchCandidates: payload.matchCandidates,
-        errorText: null
+        errorText: payload.errorText
       });
     } else {
       job = await this.app.db.createArchiveJob(payload);
@@ -154,7 +159,13 @@ class ArchiveService {
     return job;
   }
 
-  async resolveArchiveMatch({ jobId, action, gameId }) {
+  // The chapter a title was last confirmed for ("Dating My Daughter.zip" without a chapter tag).
+  learnedBranch(game, release) {
+    if (!game || !release.title) return null;
+    return this.app.db.getBranchOverrides(game.id).aliasBranches?.[slugify(release.title)] || null;
+  }
+
+  async resolveArchiveMatch({ jobId, action, gameId, version, branch }) {
     await this.app.extractionLogger.info("Resolving archive job.", {
       jobId: Number(jobId),
       action,
@@ -170,8 +181,20 @@ class ArchiveService {
     }
 
     if (action === "accept") {
+      // Confirming a match teaches the game this release name: the full file name and the bare title in front of the
+      // version / chapter tags, plus the chapter the title usually stands for.
+      const release = parseReleaseName(job.archiveName);
       await this.app.db.appendAlias(gameId, job.archiveName);
-      await this.app.extractJob(job.id, gameId, job.detectedVersion);
+      if (release.title) await this.app.db.appendAlias(gameId, release.title);
+      const nextBranch = branch !== undefined ? String(branch || "").trim() || null : job.branch;
+      if (nextBranch !== job.branch) await this.app.db.updateArchiveJob(job.id, { branch: nextBranch });
+      if (nextBranch && release.title && !release.branch) {
+        const overrides = this.app.db.getBranchOverrides(gameId);
+        overrides.aliasBranches = { ...overrides.aliasBranches, [slugify(release.title)]: nextBranch };
+        await this.app.db.saveBranchOverrides(gameId, overrides);
+      }
+      const nextVersion = version !== undefined ? sanitizeVersion(version) || null : job.detectedVersion;
+      await this.app.extractJob(job.id, gameId, nextVersion);
       this.app.emitChange();
       return this.app.getState();
     }
@@ -262,11 +285,13 @@ class ArchiveService {
       if (!children.length) throw new Error("Archive contains no installable files.");
       const sourceDirectory = archiveHasSingleRootFolder && children.length === 1 && children[0].isDirectory()
         ? path.join(targetDirectory, children[0].name) : targetDirectory;
-      const baseDirectory = buildVersionedInstallDirectory(installDirectory, game.title, versionForFolder);
+      const branchDirectory = buildBranchDirectory(installDirectory, job.branch);
+      const baseDirectory = buildVersionedInstallDirectory(branchDirectory, game.title, versionForFolder);
       let finalDirectory = baseDirectory;
       let suffix = 2;
       while (await this.app.assetExists(finalDirectory)) finalDirectory = baseDirectory + " (" + suffix++ + ")";
       await assertManagedInstallPath(state.settings.installRoot, [installDirectory], finalDirectory);
+      await fs.mkdir(branchDirectory, { recursive: true });
       // Windows scanners can hold freshly extracted files briefly after 7-Zip closes.
       // Retry only the same rename; never copy over or delete an existing target.
       for (let attempt = 0; ; attempt++) {
@@ -283,7 +308,7 @@ class ArchiveService {
       publishedDirectory = finalDirectory;
       await this.app.db.upsertGameFolder(gameId, {
         folderPath: finalDirectory, folderName: path.basename(finalDirectory),
-        version: detectedVersion || game.currentVersion || null, versionSource: "manual"
+        version: detectedVersion || game.currentVersion || null, versionSource: "manual", branch: job.branch || null
       });
       await this.app.syncGameFolders(gameId, { game, rootOverride: installDirectory });
       registered = true;

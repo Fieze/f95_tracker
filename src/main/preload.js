@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("f95App", {
   refreshGame: (gameId) => ipcRenderer.invoke("games:refresh", gameId),
   updateGameSeasons: (payload) => ipcRenderer.invoke("games:updateSeasons", payload),
   setInstalledVersion: (payload) => ipcRenderer.invoke("games:setInstalledVersion", payload),
+  updateGameBranches: (payload) => ipcRenderer.invoke("games:updateBranches", payload),
   listGameFolders: (gameId) => ipcRenderer.invoke("games:listFolders", { gameId }),
   updateGameFolderVersion: (payload) => ipcRenderer.invoke("games:updateFolderVersion", payload),
   updateGameFolderMetadata: (payload) => ipcRenderer.invoke("games:updateFolderMetadata", payload),

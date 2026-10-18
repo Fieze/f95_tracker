@@ -220,6 +220,37 @@ function renderJobs() {
     });
 
     const isActionable = !["processed", "processing"].includes(job.status);
+    // Version and chapter / season for this archive; the version list comes from the chosen game's changelog.
+    const versionInput = createNode("input", "job-version-input");
+    versionInput.type = "text";
+    versionInput.placeholder = "Version";
+    versionInput.setAttribute("aria-label", "Version");
+    const branchInput = createNode("input", "job-version-input");
+    branchInput.type = "text";
+    branchInput.placeholder = "Chapter / season";
+    branchInput.setAttribute("aria-label", "Chapter or season");
+    branchInput.value = job.branch || "";
+    const versionList = document.createElement("datalist");
+    const branchList = document.createElement("datalist");
+    versionList.id = `job-versions-${job.id}`;
+    branchList.id = `job-branches-${job.id}`;
+    versionInput.setAttribute("list", versionList.id);
+    branchInput.setAttribute("list", branchList.id);
+    const refreshJobOptions = () => {
+      const game = state.games.find((entry) => String(entry.id) === gameSelect.value);
+      versionList.innerHTML = "";
+      branchList.innerHTML = "";
+      (game?.versionOptions || []).forEach((entry) => versionList.appendChild(new Option(entry.branch || "", entry.version)));
+      (game?.branches || []).forEach((label) => branchList.appendChild(new Option("", label)));
+      return game;
+    };
+    versionInput.value = snapVersionToOptions(refreshJobOptions(), job.detectedVersion || "");
+    gameSelect.addEventListener("change", () => {
+      const game = refreshJobOptions();
+      versionInput.value = snapVersionToOptions(game, versionInput.value);
+    });
+    if (isActionable) assignWrap.append(versionInput, branchInput, versionList, branchList);
+
     if (isActionable) {
       const extractButton = createNode("button", "choice-button", "Extract");
       extractButton.type = "button";
@@ -232,7 +263,9 @@ function renderJobs() {
         await window.f95App.resolveArchiveMatch({
           jobId: job.id,
           action: "accept",
-          gameId: selectedGameId
+          gameId: selectedGameId,
+          version: versionInput.value.trim(),
+          branch: branchInput.value.trim()
         });
         await reloadState();
       });

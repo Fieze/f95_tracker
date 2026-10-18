@@ -14,6 +14,7 @@ module.exports = {
       archiveName: row.archive_name,
       gameId: row.game_id,
       detectedVersion: row.detected_version,
+      branch: row.branch || null,
       status: row.status,
       confidence: row.confidence,
       matchCandidates: safeJsonParse(row.match_candidates, []),
@@ -35,8 +36,8 @@ module.exports = {
     this.db.run(
       `INSERT INTO archive_jobs (
         archive_path, archive_name, archive_hash, game_id, detected_version,
-        status, confidence, match_candidates, error_text, extracted_to, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        status, confidence, match_candidates, error_text, extracted_to, created_at, updated_at, branch
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         payload.archivePath,
         payload.archiveName,
@@ -49,7 +50,8 @@ module.exports = {
         payload.errorText || null,
         payload.extractedTo || null,
         new Date().toISOString(),
-        new Date().toISOString()
+        new Date().toISOString(),
+        payload.branch || null
       ]
     );
     const insertedId = this.first("SELECT last_insert_rowid() AS id")?.id || null;
@@ -74,13 +76,14 @@ module.exports = {
       match_candidates: JSON.stringify(updates.matchCandidates ?? safeJsonParse(existing.match_candidates, [])),
       error_text: updates.errorText ?? existing.error_text,
       extracted_to: updates.extractedTo ?? existing.extracted_to,
+      branch: updates.branch !== undefined ? updates.branch || null : existing.branch ?? null,
       updated_at: new Date().toISOString()
     };
 
     this.db.run(
       `UPDATE archive_jobs SET
         archive_path = ?, archive_name = ?, archive_hash = ?, game_id = ?, detected_version = ?, status = ?,
-        confidence = ?, match_candidates = ?, error_text = ?, extracted_to = ?, updated_at = ?
+        confidence = ?, match_candidates = ?, error_text = ?, extracted_to = ?, updated_at = ?, branch = ?
       WHERE id = ?`,
       [
         next.archive_path,
@@ -94,6 +97,7 @@ module.exports = {
         next.error_text,
         next.extracted_to,
         next.updated_at,
+        next.branch,
         jobId
       ]
     );

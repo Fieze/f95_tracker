@@ -223,6 +223,10 @@ async function createDownloadWindow(payload) {
     throw new Error("Direct in-app downloads are currently only supported for Vikingfile and Pixeldrain links.");
   }
 
+  if (String(payload?.variant || "").toLowerCase() === "split" || /split/i.test(payload?.label || "")) {
+    throw new Error("Split archives are not supported by this app. Open the download page and download the parts yourself.");
+  }
+
   await ctx.appService.ensureDownloadReady();
 
   const job = ctx.appService.createDownloadJob(payload);

@@ -550,3 +550,30 @@ test("parseThread falls back to the star widget and rejects out-of-range ratings
   assert.equal(ok.ratingCount, 70);
   assert.equal(parseThread(widget("9"), "https://f95zone.to/threads/g.1/").rating, null);
 });
+
+test("parseThread groups download rows by chapter heading and variant", () => {
+  const html = `
+    <html><body>
+      <h1 class="p-title-value">[Ren'Py] Dating My Daughter [Ch.1-4 v1.01] [MrDots Games]</h1>
+      <div class="message-body"><div class="bbWrapper">
+        <p>DOWNLOADS</p>
+        <p>Chapter 1 v1.0</p>
+        <p>Win/Linux (HQ): <a href="https://example.org/c1hq">Host</a></p>
+        <p>Win/Linux (LQ): <a href="https://example.org/c1lq">Host</a></p>
+        <p>Chapter 2</p>
+        <p>Win/Linux: <a href="https://example.org/c2">Host</a></p>
+        <p>Win/Linux - Split: <a href="https://example.org/c2s">Host</a></p>
+      </div></div>
+    </body></html>`;
+  const result = parseThread(html, "https://f95zone.to/threads/dating-my-daughter.597/");
+  assert.deepEqual(result.titleBranches, ["Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4"]);
+  assert.deepEqual(
+    result.downloadGroups.map((group) => [group.label, group.branch, group.variant, group.branchVersion]),
+    [
+      ["Chapter 1 · Win/Linux · HQ", "Chapter 1", "HQ", "1.0"],
+      ["Chapter 1 · Win/Linux · LQ", "Chapter 1", "LQ", "1.0"],
+      ["Chapter 2 · Win/Linux", "Chapter 2", "", null],
+      ["Chapter 2 · Win/Linux · Split", "Chapter 2", "Split", null]
+    ]
+  );
+});

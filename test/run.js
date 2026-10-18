@@ -9,6 +9,7 @@ require("./utils.test");
 require("./logger.test");
 require("./db.test");
 require("./matcher.test");
+require("./releaseNames.test");
 require("./extractor.test");
 require("./appService.test");
 require("./downloads.test");

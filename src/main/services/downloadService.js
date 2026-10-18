@@ -88,7 +88,7 @@ class DownloadService {
     return watchFolder;
   }
 
-  createDownloadJob({ gameId, linkId = null, url, label = "", detectedVersion = "" }) {
+  createDownloadJob({ gameId, linkId = null, url, label = "", detectedVersion = "", branch = "", variant = "" }) {
     const sourceUrl = String(url || "").trim();
     if (!/^https?:/i.test(sourceUrl)) {
       throw new Error("Download url must be absolute.");
@@ -103,6 +103,8 @@ class DownloadService {
       host: this.getDownloadHost(sourceUrl),
       label: String(label || "").trim(),
       detectedVersion: String(detectedVersion || "").trim() || null,
+      branch: String(branch || "").trim() || null,
+      variant: String(variant || "").trim() || null,
       fileName: "",
       targetPath: "",
       bytesReceived: 0,
@@ -327,6 +329,7 @@ class DownloadService {
           archiveHash: null,
           gameId: job.gameId,
           detectedVersion: job.detectedVersion || null,
+          branch: job.branch || null,
           autoExtract: true
         });
       }

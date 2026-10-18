@@ -93,6 +93,7 @@ function bindIpc() {
   handle("games:setInstalledVersion", async (_event, payload) =>
     ctx.appService.setInstalledVersion(payload.gameId, payload.installedVersion, payload.installPath)
   );
+  handle("games:updateBranches", async (_event, payload) => ctx.appService.updateGameBranches(payload.gameId, payload));
   handle("games:listFolders", async (_event, payload) => ctx.appService.listGameFolders(payload.gameId));
   handle("games:updateFolderVersion", async (_event, payload) => ctx.appService.updateGameFolderVersion(payload));
   handle("games:updateFolderMetadata", async (_event, payload) => ctx.appService.updateGameFolderMetadata(payload, payload));

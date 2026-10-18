@@ -1,5 +1,6 @@
 const cheerio = require("cheerio");
 const { sanitizeVersion } = require("./utils");
+const { expandBranches, parseBranch, parsePlatform, parseVariant } = require("./releaseNames");
 
 const VERSION_PATTERNS = [
   /\[([^\]]*?(?:v(?:ersion)?\.?\s*[0-9][^\]]*))\]/i,
@@ -316,11 +317,6 @@ function parseThreadTitle(rawTitle) {
   };
 }
 
-function parseDownloadLabel(text) {
-  const match = String(text || "").match(/^(win\/linux\/mac|win\/linux|windows|win)(?:\s*\([^)]*\))?\s*:/i);
-  return match ? match[1] : null;
-}
-
 function normalizeDownloadLabel(label) {
   const normalized = String(label || "").toLowerCase();
   if (normalized === "windows") {
@@ -329,12 +325,35 @@ function normalizeDownloadLabel(label) {
   return label;
 }
 
+// "win" / "pc" / "linux" at the start of a row, spelled the way the thread does for the combined labels.
+function parsePlatformLabel(text) {
+  const raw = String(text || "");
+  return /^(win\/linux\/mac|win\/linux|windows|win)$/i.test(raw) ? raw : parsePlatform(raw) || raw;
+}
+
 function isDownloadsHeaderLine(text) {
   return /^downloads?\b[\s:.-]*$/i.test(String(text || "").trim());
 }
 
 function isDownloadRow(text) {
   return /^(win\/linux\/mac|win\/linux|windows|win|mac|android)(?:\s*\([^)]*\))?\s*:/i.test(String(text || "").trim());
+}
+
+// Download rows may carry a variant between the platform and the colon: "Win/Linux (HQ):", "Win/Linux - Split:".
+const LOOSE_ROW_PATTERN = /^(win\/linux\/mac|win\/linux|windows|win|mac|android|linux|pc)(?![a-z])([^:]{0,40}):/i;
+
+function isLooseDownloadRow(text) {
+  return LOOSE_ROW_PATTERN.test(String(text || "").trim());
+}
+
+// A line without links that names a chapter / season / special ahead of its download rows: "Chapter 2 v0.5".
+function parseBranchHeading(line) {
+  const text = String(line.text || "").trim();
+  if (!text || line.links.length > 0 || text.length > 90 || isLooseDownloadRow(text) || isDownloadsHeaderLine(text)) return null;
+  const branch = parseBranch(text);
+  if (!branch || branch.range) return null;
+  const version = text.match(/\bv(?:ersion)?\.?\s*(\d[0-9a-z._-]*)/i)?.[1];
+  return { label: branch.label, version: sanitizeVersion(version) || null };
 }
 
 function isBlockBoundary(tagName) {
@@ -501,15 +520,21 @@ function extractDownloadSectionLines(lines) {
       continue;
     }
 
+    // Chapter / season headings sit between the rows of a multi-branch thread and do not end the block.
+    if (parseBranchHeading(line)) {
+      sectionLines.push(line);
+      continue;
+    }
+
     if (!inDownloadBlock) {
-      if (isDownloadRow(line.text)) {
+      if (isLooseDownloadRow(line.text)) {
         inDownloadBlock = true;
         sectionLines.push(line);
       }
       continue;
     }
 
-    if (!isDownloadRow(line.text)) {
+    if (!isLooseDownloadRow(line.text)) {
       break;
     }
 
@@ -525,16 +550,38 @@ function extractDownloadSectionLines(lines) {
 function collectDownloadGroupsFromLines(lines) {
   const seen = new Set();
   const groups = new Map();
+  let heading = null;
 
   lines.forEach((line) => {
-    const label = parseDownloadLabel(line.text);
-    if (!label || line.links.length === 0) {
+    const headingBranch = parseBranchHeading(line);
+    if (headingBranch) {
+      heading = headingBranch;
       return;
     }
 
-    const normalizedLabel = normalizeDownloadLabel(label);
-    if (!groups.has(normalizedLabel)) {
-      groups.set(normalizedLabel, []);
+    const rowMatch = String(line.text || "").trim().match(LOOSE_ROW_PATTERN);
+    if (!rowMatch || line.links.length === 0) {
+      return;
+    }
+
+    const platform = normalizeDownloadLabel(parsePlatformLabel(rowMatch[1]));
+    // Only Windows-capable builds are listed; Mac, Android and Linux-only rows are ignored.
+    if (!/^win/i.test(platform)) {
+      return;
+    }
+    const variantInfo = parseVariant(rowMatch[2]);
+    const rowBranch = parseBranch(rowMatch[2]);
+    const branch = rowBranch?.label || heading?.label || null;
+    const label = [branch, platform, variantInfo.variant].filter(Boolean).join(" · ");
+    if (!groups.has(label)) {
+      groups.set(label, {
+        label,
+        branch,
+        platform,
+        variant: variantInfo.variant,
+        branchVersion: !rowBranch && heading?.label === branch ? heading.version : null,
+        links: []
+      });
     }
 
     line.links.forEach((link) => {
@@ -542,16 +589,11 @@ function collectDownloadGroupsFromLines(lines) {
         return;
       }
       seen.add(link.url);
-      groups.get(normalizedLabel).push(link);
+      groups.get(label).links.push(link);
     });
   });
 
-  return [...groups.entries()]
-    .map(([label, links]) => ({
-      label,
-      links
-    }))
-    .filter((group) => group.links.length > 0);
+  return [...groups.values()].filter((group) => group.links.length > 0);
 }
 
 function collectDownloadGroups($, root) {
@@ -710,6 +752,7 @@ function parseThread(html, sourceUrl) {
   }
 
   const titleParts = parseThreadTitle(rawTitle);
+  const titleBranches = expandBranches(rawTitle);
   const logicalLines = buildLogicalLines($, article.length ? article : $.root());
 
   const developer = titleParts.developer || null;
@@ -766,6 +809,7 @@ function parseThread(html, sourceUrl) {
     threadTitle: titleParts.threadTitle,
     title: titleParts.title,
     currentVersion,
+    titleBranches,
     developer,
     engine,
     threadStatus,
@@ -792,6 +836,7 @@ function parseThread(html, sourceUrl) {
       loggedIn,
       guestView,
       titlePrefixes,
+      titleBranches,
       loginPageDetected: detectLoginPage(sourceUrl, html),
       authWallDetected: detectAuthWall(html),
       titleDetected: rawTitle,

@@ -25,15 +25,20 @@ module.exports = {
     const now = new Date().toISOString();
     const existing = this.first("SELECT * FROM game_folders WHERE game_id = ? AND folder_path = ?", [gameId, folder.folderPath]);
     const versionSource = folder.versionSource || existing?.version_source || "inferred";
-    const seasonNumber = folder.seasonNumber ?? existing?.season_number ?? null;
+    const branch = folder.branch !== undefined ? folder.branch || null : existing?.branch ?? null;
+    // Numbered branches (chapters, seasons) also drive the existing season ordering.
+    const branchNumber = /^(?:Chapter|Season) (\d+)$/.exec(branch || "")?.[1];
+    const seasonNumber = folder.seasonNumber ?? existing?.season_number ?? (branchNumber ? Number(branchNumber) : null);
     const seasonFinal = folder.seasonFinal ?? Boolean(existing?.season_final);
     const preferredExePath = folder.preferredExePath ?? existing?.preferred_exe_path ?? null;
     const sortRank = folder.sortRank ?? existing?.sort_rank ?? null;
 
+    if (branchNumber) this.db.run("UPDATE games SET has_seasons = 1 WHERE id = ?", [gameId]);
+
     if (existing) {
       this.db.run(
         `UPDATE game_folders SET
-          folder_name = ?, folder_path = ?, version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, sort_rank = ?, updated_at = ?
+          folder_name = ?, folder_path = ?, version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, sort_rank = ?, branch = ?, updated_at = ?
         WHERE id = ?`,
         [
           folder.folderName,
@@ -44,6 +49,7 @@ module.exports = {
           seasonFinal ? 1 : 0,
           preferredExePath,
           sortRank,
+          branch,
           now,
           existing.id
         ]
@@ -51,8 +57,8 @@ module.exports = {
     } else {
       this.db.run(
         `INSERT INTO game_folders (
-          game_id, folder_name, folder_path, version, version_source, season_number, season_final, preferred_exe_path, sort_rank, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+          game_id, folder_name, folder_path, version, version_source, season_number, season_final, preferred_exe_path, sort_rank, branch, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
         [
           gameId,
           folder.folderName,
@@ -63,6 +69,7 @@ module.exports = {
           seasonFinal ? 1 : 0,
           preferredExePath,
           sortRank,
+          branch,
           now,
           now
         ]
@@ -122,13 +129,14 @@ module.exports = {
     const nextSeasonFinal = Object.prototype.hasOwnProperty.call(updates, "seasonFinal")
       ? (updates.seasonFinal ? 1 : 0)
       : existing.season_final;
+    const nextBranch = Object.prototype.hasOwnProperty.call(updates, "branch") ? updates.branch || null : existing.branch ?? null;
     const nextPreferredExePath = Object.prototype.hasOwnProperty.call(updates, "preferredExePath")
       ? updates.preferredExePath ?? null
       : existing.preferred_exe_path;
 
     this.db.run(
       `UPDATE game_folders SET
-        version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, updated_at = ?
+        version = ?, version_source = ?, season_number = ?, season_final = ?, preferred_exe_path = ?, branch = ?, updated_at = ?
       WHERE id = ?`,
       [
         nextVersion,
@@ -136,6 +144,7 @@ module.exports = {
         nextSeasonNumber,
         nextSeasonFinal,
         nextPreferredExePath,
+        nextBranch,
         new Date().toISOString(),
         folderId
       ]
@@ -199,6 +208,7 @@ module.exports = {
       versionSource: row.version_source || "inferred",
       seasonNumber: row.season_number ?? null,
       seasonFinal: Boolean(row.season_final),
+      branch: row.branch || null,
       preferredExePath: row.preferred_exe_path || null,
       sortRank: row.sort_rank ?? null,
       createdAt: row.created_at,
