@@ -39,6 +39,9 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 - Track active downloads in the activity bar.
 - Show live progress, status, file names, and cancellation controls.
 - Continue the workflow from resolved download pages when the app can detect the final file URL.
+- Queue further downloads while the download window is busy, and add more supported hosts in the settings.
+- Resume interrupted transfers safely (If-Range, exact byte check) and keep partial files for later; verify archives that arrive without a length.
+- Keep the download history across restarts.
 
 ### Archive Detection And Extraction
 
@@ -51,6 +54,9 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 - Extract archives with a bundled `7z` binary.
 - Show live extraction progress and job status in the activity bar.
 - Cleanly handle extraction errors and interrupted jobs.
+- Check free disk space before extracting and report byte-based progress.
+- Explain password-protected, incomplete and multi-part archives, and extract password-protected ones after entering the password.
+- Optionally keep extracted archives in an `Extracted` folder instead of deleting them.
 
 ### Install Folder Management
 

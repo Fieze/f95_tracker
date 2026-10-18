@@ -359,7 +359,7 @@ function buildGameDetailsCard(selectedGame) {
       const row = createNode("div", "download-row");
       const job = getDownloadJobForLink(selectedGame.id, link);
       const status = job?.status || "";
-      const busy = ["opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
+      const busy = ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
       const supportsDirectDownload = isSupportedDirectDownload(link.url, link.label);
       const labelWrap = createNode("div", "download-meta");
       const actions = createNode("div", "download-actions");

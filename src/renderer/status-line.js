@@ -26,7 +26,9 @@ function buildStatusItems() {
 
   const extraction = state.currentExtraction;
   if (extraction) {
-    const files = extraction.totalFiles ? ` (${extraction.processedFiles || 0}/${extraction.totalFiles} files)` : "";
+    const files = Number.isFinite(extraction.percent)
+      ? ` (${extraction.percent}%)`
+      : extraction.totalFiles ? ` (${extraction.processedFiles || 0}/${extraction.totalFiles} files)` : "";
     items.push({ kind: "running", text: `Extracting ${extraction.archiveName}${files}` });
   }
 

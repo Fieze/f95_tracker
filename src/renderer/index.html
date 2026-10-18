@@ -152,6 +152,16 @@
           <input name="syncIntervalMinutes" type="number" min="5" step="5" />
           <small class="field-hint">How often tracked threads are checked for updates (at least 5 minutes).</small>
         </label>
+        <label class="checkbox-field">
+          <input name="keepArchives" type="checkbox" />
+          Keep archives after extracting
+          <small class="field-hint">Extracted archives are moved to an "Extracted" folder inside the watch folder instead of being deleted.</small>
+        </label>
+        <label>
+          Additional Download Hosts
+          <textarea name="extraDownloadHosts" rows="3" placeholder="example-host.com"></textarea>
+          <small class="field-hint">One host name per line. Links on these hosts can be downloaded inside the app, besides Pixeldrain and Vikingfile.</small>
+        </label>
         <div class="settings-data-actions">
           <button id="export-data" class="secondary" type="button">Export Data</button>
           <button id="import-data" class="secondary" type="button">Import Data</button>

@@ -109,6 +109,7 @@ function bindIpc() {
   );
   handle("games:refreshAll", async () => ctx.appService.refreshAllGames());
   handle("jobs:decision", async (_event, payload) => ctx.appService.resolveArchiveMatch(payload));
+  handle("jobs:password", async (_event, payload) => ctx.appService.setArchivePassword(payload));
   handle("jobs:deleteFile", async (_event, payload) => ctx.appService.deleteArchiveFile(payload?.jobId));
   handle("downloads:start", async (_event, payload) => createDownloadWindow(payload));
   handle("downloads:cancel", async (_event, payload) => {

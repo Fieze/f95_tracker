@@ -19,10 +19,39 @@ function isSupportedDirectDownload(candidateUrl, label = "") {
       host === "vik1ngfile.site" ||
       host === "vikingfile.com" ||
       host === "pixeldrain.com" ||
-      host === "www.pixeldrain.com"
+      host === "www.pixeldrain.com" ||
+      getExtraDownloadHosts().some((extra) => host === extra || host.endsWith("." + extra))
     );
   } catch {
     return false;
+  }
+}
+
+// Hosts the user added in the settings (one per line; a pasted URL is reduced to its host name).
+function getExtraDownloadHosts() {
+  const raw = String(ctx.appService?.db?.getSettings?.().extraDownloadHosts || "");
+  return raw
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, ""))
+    .filter(Boolean);
+}
+
+// Windows waiting for the single download window to become free, oldest first.
+const waitingDownloads = [];
+
+function isDownloadWindowOpen() {
+  return Boolean(ctx.downloadWindow && !ctx.downloadWindow.isDestroyed());
+}
+
+async function openNextWaitingDownload() {
+  while (!isDownloadWindowOpen() && waitingDownloads.length) {
+    const { job, payload } = waitingDownloads.shift();
+    if (ctx.appService.getDownloadJob(job.id)?.status !== "queued") continue;
+    try {
+      await openDownloadWindowForJob(job, payload);
+    } catch (error) {
+      ctx.downloadLogger?.error("Queued download window failed to open.", { jobId: job.id, message: error.message });
+    }
   }
 }
 
@@ -196,14 +225,19 @@ async function createDownloadWindow(payload) {
 
   await ctx.appService.ensureDownloadReady();
 
-  if (ctx.downloadWindow && !ctx.downloadWindow.isDestroyed()) {
-    if (ctx.downloadWindowState?.jobId) {
-      ctx.appService.cancelDownloadJob(ctx.downloadWindowState.jobId, "Canceled because another download window was opened.");
-    }
-    closeDownloadWindow();
-  }
-
   const job = ctx.appService.createDownloadJob(payload);
+  if (isDownloadWindowOpen()) {
+    // One download window at a time: the new download waits for its turn instead of cancelling the running one.
+    ctx.appService.updateDownloadJob(job.id, { status: "queued" });
+    waitingDownloads.push({ job, payload });
+    return ctx.appService.getDownloadJob(job.id);
+  }
+  return openDownloadWindowForJob(job, payload);
+}
+
+async function openDownloadWindowForJob(job, payload) {
+  const targetUrl = String(payload?.url || "").trim();
+  ctx.appService.updateDownloadJob(job.id, { status: "opening_host" });
   await syncAuthCookiesToDownloadSession(targetUrl);
 
   await ctx.downloadLogger?.info("Creating download window.", {
@@ -307,6 +341,7 @@ async function createDownloadWindow(payload) {
     if (state && !state.closing && !state.downloadStarted) {
       ctx.appService.cancelDownloadJob(state.jobId);
     }
+    void openNextWaitingDownload();
   });
 
   try {

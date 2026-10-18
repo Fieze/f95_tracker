@@ -92,15 +92,21 @@ class DatabaseService {
     return {
       watchFolder: settings.watch_folder || "",
       installRoot: settings.install_root || "",
-      syncIntervalMinutes: Number(settings.sync_interval_minutes || 30)
+      syncIntervalMinutes: Number(settings.sync_interval_minutes || 30),
+      keepArchives: settings.keep_archives === "1",
+      extraDownloadHosts: settings.extra_download_hosts || ""
     };
   }
 
-  async saveSettings(settings) {
+  async saveSettings(input) {
+    const current = this.getSettings();
+    const settings = { ...current, ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) };
     const map = {
       watch_folder: settings.watchFolder || "",
       install_root: settings.installRoot || "",
-      sync_interval_minutes: String(settings.syncIntervalMinutes || 30)
+      sync_interval_minutes: String(settings.syncIntervalMinutes || 30),
+      keep_archives: settings.keepArchives ? "1" : "0",
+      extra_download_hosts: String(settings.extraDownloadHosts || "")
     };
 
     const stmt = this.db.prepare(

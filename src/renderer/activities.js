@@ -31,6 +31,7 @@ function formatDurationMs(value) {
 
 function formatDownloadStatusLabel(status) {
   const labels = {
+    queued: "waiting in queue",
     opening_host: "opening host",
     awaiting_download: "waiting for download",
     resolving: "resolving",
@@ -83,12 +84,12 @@ function buildDownloadProgressSummary(job) {
 
 function getActiveDownloadJobs() {
   return (state.downloadJobs || []).filter((job) =>
-    ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
+    ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
   );
 }
 
 function isCancelableDownloadJob(job) {
-  return ["opening_host", "awaiting_download", "resolving", "downloading"].includes(String(job?.status || ""));
+  return ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(String(job?.status || ""));
 }
 
 function getDownloadJobForLink(gameId, link) {
@@ -142,7 +143,7 @@ function getAttentionArchiveCount(jobs = state.archiveJobs) {
 
 function getActiveDownloadCount(downloadJobs = state.downloadJobs) {
   return (downloadJobs || []).filter((job) =>
-    ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
+    ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status)
   ).length;
 }
 
@@ -237,6 +238,28 @@ function renderJobs() {
       });
       actions.appendChild(extractButton);
 
+      if (job.status === "failed" && /password/i.test(job.errorText || "")) {
+        const passwordInput = createNode("input", "job-password-input");
+        passwordInput.type = "password";
+        passwordInput.placeholder = "Archive password";
+        passwordInput.setAttribute("aria-label", "Archive password");
+        const passwordButton = createNode("button", "choice-button", "Extract with password");
+        passwordButton.type = "button";
+        const submitPassword = async () => {
+          if (!passwordInput.value) return;
+          try {
+            await window.f95App.setArchivePassword(job.id, passwordInput.value);
+          } catch (error) {
+            alert(error.message);
+          }
+          await reloadState();
+        };
+        passwordButton.addEventListener("click", submitPassword);
+        passwordInput.addEventListener("keydown", (event) => { if (event.key === "Enter") submitPassword(); });
+        actions.appendChild(passwordInput);
+        actions.appendChild(passwordButton);
+      }
+
       const deleteButton = createNode("button", "choice-button", "Delete File");
       deleteButton.type = "button";
       deleteButton.addEventListener("click", async () => {
@@ -251,7 +274,7 @@ function renderJobs() {
     } else {
       gameSelect.disabled = true;
       if (job.status === "processed") {
-        const done = createNode("span", "job-finished-note", "Archive was extracted and removed.");
+        const done = createNode("span", "job-finished-note", state.settings.keepArchives ? "Archive was extracted and moved to the Extracted folder." : "Archive was extracted and removed.");
         actions.appendChild(done);
       } else {
         const deleteButton = createNode("button", "choice-button", "Delete File");
@@ -422,7 +445,7 @@ function renderExtractionStatus() {
     createNode(
       "p",
       "extraction-text",
-      `${extraction.archiveName} is being extracted. Current file: ${extraction.currentFile || "Preparing..."} | Files: ${extraction.processedFiles || 0}${extraction.totalFiles ? ` / ${extraction.totalFiles}` : ""} | Elapsed: ${formatDurationMs(elapsedMs)} | Estimated remaining: ${formatDurationMs(remainingMs)}`
+      `${extraction.archiveName} is being extracted. Current file: ${extraction.currentFile || "Preparing..."} | Files: ${extraction.processedFiles || 0}${extraction.totalFiles ? ` / ${extraction.totalFiles}` : ""}${Number.isFinite(extraction.percent) ? ` (${extraction.percent}%)` : ""} | Elapsed: ${formatDurationMs(elapsedMs)} | Estimated remaining: ${formatDurationMs(remainingMs)}`
     )
   );
 }

@@ -4,6 +4,8 @@ function setSettingsForm(settings) {
   form.watchFolder.value = settings.watchFolder || "";
   form.installRoot.value = settings.installRoot || "";
   form.syncIntervalMinutes.value = settings.syncIntervalMinutes || 30;
+  form.keepArchives.checked = Boolean(settings.keepArchives);
+  form.extraDownloadHosts.value = settings.extraDownloadHosts || "";
 }
 
 function renderAuth() {
@@ -36,7 +38,9 @@ async function handleSettingsSubmit(event) {
     await window.f95App.updateSettings({
       watchFolder: form.watchFolder.value.trim(),
       installRoot: form.installRoot.value.trim(),
-      syncIntervalMinutes: Number(form.syncIntervalMinutes.value || 30)
+      syncIntervalMinutes: Number(form.syncIntervalMinutes.value || 30),
+      keepArchives: form.keepArchives.checked,
+      extraDownloadHosts: form.extraDownloadHosts.value.trim()
     });
     $("#settings-status").textContent = "Saved";
     await reloadState();

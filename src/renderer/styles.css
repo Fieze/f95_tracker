@@ -2234,3 +2234,23 @@ textarea::placeholder {
 .status-idle {
   opacity: 1;
 }
+
+.checkbox-field {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.checkbox-field input {
+  width: auto;
+  margin: 0;
+}
+
+.checkbox-field .field-hint {
+  grid-column: 1 / -1;
+}
+
+.job-password-input {
+  width: 14rem;
+  padding: 8px 12px;
+}

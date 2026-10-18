@@ -1,10 +1,17 @@
 const fs = require("fs/promises");
+const { atomicWrite } = require("./safeFiles");
 const path = require("path");
 const crypto = require("crypto");
 const DOWNLOAD_PROGRESS_EMIT_INTERVAL_MS = 250;
+const ACTIVE_STATUSES = ["queued", "opening_host", "awaiting_download", "resolving", "downloading"];
+const JOB_HISTORY_LIMIT = 50;
+const JOB_HISTORY_FILE = "download-jobs.json";
 const MAX_RESUME_ATTEMPTS = 3;
 const RESUME_BACKOFF_MS = 1000;
 const DOWNLOADABLE_FILE_EXTENSIONS = new Set([".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".exe", ".apk"]);
+const VERIFIABLE_ARCHIVE_EXTENSIONS = new Set([".zip", ".rar", ".7z"]);
+const STALE_PARTIAL_MS = 7 * 24 * 60 * 60 * 1000;
+const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 // Shared application state and facade calls are supplied by AppService.
 class DownloadService {
@@ -12,11 +19,61 @@ class DownloadService {
     this.app = app;
     this.reservedPaths = new Set();
     this.reservationQueue = Promise.resolve();
+    // Jobs are kept by id so progress updates (several per second) do not copy a whole list.
+    this.jobs = new Map();
+    this.nextJobId = 1;
+    this.controllers = new Map();
+    this.persistQueue = Promise.resolve();
   }
+
   listDownloadJobs() {
-    return [...this.app.downloadJobs].sort((left, right) => {
-      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    return [...this.jobs.values()].sort((left, right) => {
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime() || right.id - left.id;
     });
+  }
+
+  replaceJobs(jobs) {
+    this.jobs = new Map((jobs || []).map((job) => [job.id, job]));
+  }
+
+  hasActiveJobs(gameId = null) {
+    return [...this.jobs.values()].some((job) => ACTIVE_STATUSES.includes(job.status) && (gameId == null || job.gameId === Number(gameId)));
+  }
+
+  // The finished-download list survives restarts; anything that was still running is reported as interrupted.
+  async loadPersistedJobs() {
+    try {
+      const saved = JSON.parse(await fs.readFile(path.join(this.app.userDataPath, JOB_HISTORY_FILE), "utf8"));
+      if (!Array.isArray(saved)) return;
+      for (const job of saved.slice(-JOB_HISTORY_LIMIT)) {
+        if (!Number.isInteger(job?.id) || this.jobs.has(job.id)) continue;
+        const interrupted = ACTIVE_STATUSES.includes(job.status);
+        this.jobs.set(job.id, interrupted
+          ? { ...job, status: "canceled", speedBytesPerSecond: 0, errorMessage: "Download was interrupted when the app closed." }
+          : job);
+        this.nextJobId = Math.max(this.nextJobId, job.id + 1);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") await this.app.downloadLogger?.warn("Download history could not be read.", { message: error.message });
+    }
+  }
+
+  // Marks running jobs as interrupted and writes the history; called when the app shuts down.
+  async interruptAndPersist() {
+    for (const [id, job] of this.jobs) {
+      if (ACTIVE_STATUSES.includes(job.status)) {
+        this.jobs.set(id, { ...job, status: "canceled", speedBytesPerSecond: 0, errorMessage: "Download was interrupted when the app closed.", updatedAt: new Date().toISOString() });
+      }
+    }
+    await this.persistJobs();
+  }
+
+  persistJobs() {
+    const snapshot = this.listDownloadJobs().slice(0, JOB_HISTORY_LIMIT).reverse();
+    this.persistQueue = this.persistQueue
+      .then(() => atomicWrite(path.join(this.app.userDataPath, JOB_HISTORY_FILE), JSON.stringify(snapshot)))
+      .catch(() => {});
+    return this.persistQueue;
   }
 
   async ensureDownloadReady() {
@@ -38,12 +95,12 @@ class DownloadService {
     }
 
     const job = {
-      id: this.app.nextDownloadJobId++,
+      id: this.nextJobId++,
       gameId: Number(gameId) || null,
       linkId: linkId == null ? null : Number(linkId),
       sourceUrl,
       resolvedUrl: "",
-      host: this.app.getDownloadHost(sourceUrl),
+      host: this.getDownloadHost(sourceUrl),
       label: String(label || "").trim(),
       detectedVersion: String(detectedVersion || "").trim() || null,
       fileName: "",
@@ -59,39 +116,28 @@ class DownloadService {
       updatedAt: new Date().toISOString()
     };
 
-    this.app.downloadJobs = [...this.app.downloadJobs, job];
+    this.jobs.set(job.id, job);
     this.app.emitChange();
     return job;
   }
 
   updateDownloadJob(jobId, updates = {}) {
-    let nextJob = null;
-    this.app.downloadJobs = this.app.downloadJobs.map((entry) => {
-      if (entry.id !== Number(jobId)) {
-        return entry;
-      }
-
-      nextJob = {
-        ...entry,
-        ...updates,
-        updatedAt: new Date().toISOString()
-      };
-      return nextJob;
-    });
-
-    if (nextJob) {
-      this.app.emitChange();
-    }
-
+    const entry = this.jobs.get(Number(jobId));
+    if (!entry) return null;
+    const nextJob = { ...entry, ...updates, updatedAt: new Date().toISOString() };
+    this.jobs.set(entry.id, nextJob);
+    this.app.emitChange();
+    // Only status changes are written out; byte counters would hit the disk several times a second.
+    if (updates.status && updates.status !== entry.status && !ACTIVE_STATUSES.includes(updates.status)) void this.persistJobs();
     return nextJob;
   }
 
   getDownloadJob(jobId) {
-    return this.app.downloadJobs.find((entry) => entry.id === Number(jobId)) || null;
+    return this.jobs.get(Number(jobId)) || null;
   }
 
   markDownloadAwaiting(jobId) {
-    return this.app.updateDownloadJob(jobId, {
+    return this.updateDownloadJob(jobId, {
       status: "awaiting_download",
       speedBytesPerSecond: 0,
       errorMessage: ""
@@ -99,7 +145,7 @@ class DownloadService {
   }
 
   cancelDownloadJob(jobId, errorMessage = "Download window was closed before a file download started.") {
-    const job = this.app.getDownloadJob(jobId);
+    const job = this.getDownloadJob(jobId);
     if (!job) {
       return null;
     }
@@ -108,13 +154,13 @@ class DownloadService {
       return job;
     }
 
-    const controller = this.app.activeDownloadControllers.get(job.id);
+    const controller = this.controllers.get(job.id);
     if (controller) {
       controller.abort();
-      this.app.activeDownloadControllers.delete(job.id);
+      this.controllers.delete(job.id);
     }
 
-    return this.app.updateDownloadJob(jobId, {
+    return this.updateDownloadJob(jobId, {
       status: "canceled",
       speedBytesPerSecond: 0,
       errorMessage
@@ -123,8 +169,8 @@ class DownloadService {
 
   failDownloadJob(jobId, error) {
     const message = error?.message || String(error || "Download failed.");
-    this.app.activeDownloadControllers.delete(Number(jobId));
-    return this.app.updateDownloadJob(jobId, {
+    this.controllers.delete(Number(jobId));
+    return this.updateDownloadJob(jobId, {
       status: "failed",
       speedBytesPerSecond: 0,
       errorMessage: message
@@ -150,25 +196,26 @@ class DownloadService {
   }
 
   async startResolvedDownload(jobId, options = {}) {
-    const job = this.app.getDownloadJob(jobId);
+    const job = this.getDownloadJob(jobId);
     if (!job) {
       throw new Error("Download job not found.");
     }
 
     const controller = new AbortController();
-    this.app.activeDownloadControllers.set(job.id, controller);
+    this.controllers.set(job.id, controller);
     let reservedPath;
 
     try {
-      await this.app.ensureDownloadReady();
-      this.app.updateDownloadJob(job.id, {
+      const readyFolder = await this.ensureDownloadReady();
+      void this.pruneStalePartials(readyFolder);
+      this.updateDownloadJob(job.id, {
         status: "resolving",
         resolvedUrl: String(options.url || job.sourceUrl || "").trim(),
         errorMessage: ""
       });
 
       const response = await this.app.downloadFetch(String(options.url || job.sourceUrl || "").trim(), {
-        headers: this.app.buildResolvedDownloadHeaders(options),
+        headers: this.buildResolvedDownloadHeaders(options),
         redirect: "follow",
         signal: controller.signal
       });
@@ -177,53 +224,88 @@ class DownloadService {
         throw new Error(`Download request failed with status ${response.status}`);
       }
 
-      const resolvedUrl = response.url || String(options.url || job.sourceUrl || "").trim();
-      const watchFolder = await this.app.ensureDownloadReady();
-      const fileName = this.app.resolveDownloadFileName({
+      const requestUrl = String(options.url || job.sourceUrl || "").trim();
+      const resolvedUrl = response.url || requestUrl;
+      const watchFolder = await this.ensureDownloadReady();
+      const fileName = this.resolveDownloadFileName({
         preferredFileName: options.fileName,
         resolvedUrl,
         contentDisposition: response.headers.get("content-disposition") || ""
       });
-      const targetPath = await this.app.reserveDownloadTargetPath(watchFolder, fileName);
+      const headers = this.buildResolvedDownloadHeaders(options);
+      let bytesTotal = Number(response.headers.get("content-length") || 0);
+      const validators = pickValidators(response.headers);
+
+      // A partial file from an earlier attempt (same file, same validators) is continued instead of restarted.
+      const partial = await this.findResumablePartial(watchFolder, fileName, { bytesTotal, validators });
+      let targetPath;
+      let initialOffset = 0;
+      let current = response;
+      if (partial) {
+        const resumed = await this.tryContinuePartial(partial, { requestUrl, resolvedUrl, headers, signal: controller.signal, validators });
+        if (resumed) {
+          await discardBody(response);
+          current = resumed.response;
+          initialOffset = partial.size;
+          targetPath = partial.targetPath;
+          this.reservedPaths.add(targetPath);
+        } else {
+          await this.discardPartial(partial.targetPath);
+        }
+      }
+      if (!targetPath) {
+        targetPath = await this.reserveDownloadTargetPath(watchFolder, fileName);
+      }
       reservedPath = targetPath;
       const tempPath = `${targetPath}.part`;
-      const bytesTotal = Number(response.headers.get("content-length") || 0);
+      if (initialOffset > 0) bytesTotal = bytesTotal || partial.bytesTotal;
 
-      this.app.updateDownloadJob(job.id, {
+      this.updateDownloadJob(job.id, {
         status: "downloading",
         resolvedUrl,
-        host: this.app.getDownloadHost(resolvedUrl),
+        host: this.getDownloadHost(resolvedUrl),
         fileName,
         targetPath,
-        bytesReceived: 0,
+        bytesReceived: initialOffset,
         bytesTotal: Number.isFinite(bytesTotal) ? bytesTotal : 0,
         speedBytesPerSecond: 0,
         startedAt: new Date().toISOString(),
         completedAt: ""
       });
 
-      const { bytesReceived, sha256 } = await this.downloadWithResume(response, tempPath, {
+      const { bytesReceived, sha256 } = await this.downloadWithResume(current, tempPath, {
         jobId: job.id,
         bytesTotal,
         signal: controller.signal,
-        url: String(options.url || job.sourceUrl || "").trim(),
-        headers: this.app.buildResolvedDownloadHeaders(options)
+        url: resolvedUrl,
+        fallbackUrl: requestUrl,
+        headers,
+        validators,
+        initialOffset
       });
       if (bytesTotal && bytesReceived !== bytesTotal) {
-        await fs.unlink(tempPath).catch(() => {});
+        await this.discardPartial(targetPath);
         throw new Error(`Download is incomplete: received ${bytesReceived} of ${bytesTotal} bytes.`);
+      }
+      if (!bytesTotal) {
+        // Without an announced length a cut-off transfer looks complete; let 7-Zip vouch for the archive instead.
+        await this.verifyUnannouncedDownload(tempPath, fileName, controller.signal).catch(async (error) => {
+          await this.discardPartial(targetPath);
+          throw error;
+        });
       }
 
       await fs.rename(tempPath, targetPath);
-      this.app.activeDownloadControllers.delete(job.id);
-      this.app.updateDownloadJob(job.id, {
+      await fs.unlink(`${tempPath}.json`).catch(() => {});
+      this.controllers.delete(job.id);
+      this.updateDownloadJob(job.id, {
         status: "completed",
         resolvedUrl,
         fileName,
         targetPath,
-        bytesReceived: bytesTotal || this.app.getDownloadJob(job.id)?.bytesReceived || 0,
-        bytesTotal: bytesTotal || this.app.getDownloadJob(job.id)?.bytesReceived || 0,
-        speedBytesPerSecond: this.app.getDownloadJob(job.id)?.speedBytesPerSecond || 0,
+        bytesReceived: bytesTotal || this.getDownloadJob(job.id)?.bytesReceived || 0,
+        bytesTotal: bytesTotal || this.getDownloadJob(job.id)?.bytesReceived || 0,
+        speedBytesPerSecond: this.getDownloadJob(job.id)?.speedBytesPerSecond || 0,
         completedAt: new Date().toISOString(),
         sha256,
         errorMessage: ""
@@ -249,13 +331,13 @@ class DownloadService {
         });
       }
 
-      return this.app.getDownloadJob(job.id);
+      return this.getDownloadJob(job.id);
     } catch (error) {
-      this.app.activeDownloadControllers.delete(job.id);
+      this.controllers.delete(job.id);
       if (error?.name === "AbortError") {
-        this.app.cancelDownloadJob(job.id, "Download canceled.");
+        this.cancelDownloadJob(job.id, "Download canceled.");
       } else {
-        this.app.failDownloadJob(job.id, error);
+        this.failDownloadJob(job.id, error);
       }
       throw error;
     } finally {
@@ -281,39 +363,113 @@ class DownloadService {
   }
 
   // Streams the response and, when the connection drops mid-file, resumes with a Range request
-  // (up to MAX_RESUME_ATTEMPTS times) as long as the server honours it with a 206 response.
-  async downloadWithResume(response, tempPath, { jobId, bytesTotal, signal, url, headers }) {
+  // (up to MAX_RESUME_ATTEMPTS times). The request carries If-Range so a file that changed on the server is
+  // never stitched together from two versions, and the 206 answer must start exactly where we stopped.
+  // A transfer that cannot continue now but could later (server sends validators) keeps its .part file.
+  async downloadWithResume(response, tempPath, { jobId, bytesTotal, signal, url, fallbackUrl = "", headers, validators = {}, initialOffset = 0 }) {
     const hash = crypto.createHash("sha256");
-    let received = 0;
+    let received = initialOffset;
+    if (initialOffset > 0) await hashFileInto(hash, tempPath, initialOffset);
+    const resumeUrl = url || fallbackUrl;
     let current = response;
     for (let attempt = 0; ; attempt += 1) {
       try {
-        const result = await this.app.streamResponseToFile(current, tempPath, {
+        const result = await this.streamResponseToFile(current, tempPath, {
           jobId, bytesTotal, signal, offset: received, hash, keepPartial: true
         });
         received = result?.bytesReceived ?? received;
         return { bytesReceived: received, sha256: hash.digest("hex") };
       } catch (error) {
         received = error.bytesReceived ?? received;
-        const canResume = error?.name !== "AbortError" && !signal?.aborted && bytesTotal > 0 &&
-          received > 0 && received < bytesTotal && attempt < MAX_RESUME_ATTEMPTS;
+        const interrupted = received > 0 && bytesTotal > 0 && received < bytesTotal;
+        const canResume = error?.name !== "AbortError" && !signal?.aborted && interrupted && attempt < MAX_RESUME_ATTEMPTS;
         if (!canResume) {
-          await fs.unlink(tempPath).catch(() => {});
+          await this.settlePartial(tempPath, { keep: interrupted && hasValidators(validators), url: resumeUrl, bytesTotal, validators });
           throw error;
         }
         await this.app.downloadLogger?.warn("Download interrupted, trying to resume.", {
           jobId, attempt: attempt + 1, bytesReceived: received, message: error.message
         });
         await new Promise((resolve) => setTimeout(resolve, RESUME_BACKOFF_MS * (attempt + 1)));
-        current = await this.app.downloadFetch(url, {
-          headers: { ...headers, range: `bytes=${received}-` },
-          redirect: "follow",
-          signal
-        });
-        if (current.status !== 206) {
-          await fs.unlink(tempPath).catch(() => {});
+        const resumeHeaders = { ...headers, range: `bytes=${received}-` };
+        const ifRange = validators.etag || validators.lastModified;
+        if (ifRange) resumeHeaders["if-range"] = ifRange;
+        current = await this.app.downloadFetch(resumeUrl, { headers: resumeHeaders, redirect: "follow", signal });
+        if (!isContinuation(current, received)) {
+          await discardBody(current);
+          await this.settlePartial(tempPath, { keep: false });
           throw error;
         }
+      }
+    }
+  }
+
+  async settlePartial(tempPath, { keep, url, bytesTotal, validators } = {}) {
+    if (!keep) {
+      await fs.unlink(tempPath).catch(() => {});
+      await fs.unlink(tempPath + ".json").catch(() => {});
+      return;
+    }
+    const meta = { url, bytesTotal, etag: validators?.etag || "", lastModified: validators?.lastModified || "", savedAt: new Date().toISOString() };
+    await fs.writeFile(tempPath + ".json", JSON.stringify(meta)).catch(() => {});
+  }
+
+  async discardPartial(targetPath) {
+    await fs.unlink(targetPath + ".part").catch(() => {});
+    await fs.unlink(targetPath + ".part.json").catch(() => {});
+  }
+
+  // Looks for "<name>.part" plus its metadata next to the final path; only trusted when it describes the same file.
+  async findResumablePartial(folderPath, fileName, { bytesTotal, validators }) {
+    if (!bytesTotal || !hasValidators(validators)) return null;
+    const targetPath = path.join(folderPath, fileName);
+    if (this.reservedPaths.has(targetPath) || await this.app.assetExists(targetPath)) return null;
+    try {
+      const meta = JSON.parse(await fs.readFile(targetPath + ".part.json", "utf8"));
+      const stats = await fs.stat(targetPath + ".part");
+      const sameFile = meta.bytesTotal === bytesTotal &&
+        (validators.etag ? meta.etag === validators.etag : meta.lastModified === validators.lastModified);
+      const fresh = Date.now() - new Date(meta.savedAt).getTime() < STALE_PARTIAL_MS;
+      if (!sameFile || !fresh || stats.size <= 0 || stats.size >= bytesTotal) return null;
+      return { targetPath, size: stats.size, bytesTotal };
+    } catch {
+      return null;
+    }
+  }
+
+  async tryContinuePartial(partial, { requestUrl, resolvedUrl, headers, signal, validators }) {
+    const resumeHeaders = { ...headers, range: "bytes=" + partial.size + "-" };
+    resumeHeaders["if-range"] = validators.etag || validators.lastModified;
+    try {
+      const response = await this.app.downloadFetch(resolvedUrl || requestUrl, { headers: resumeHeaders, redirect: "follow", signal });
+      if (isContinuation(response, partial.size)) return { response };
+      await discardBody(response);
+    } catch (error) {
+      if (error?.name === "AbortError" || signal?.aborted) throw error;
+    }
+    return null;
+  }
+
+  async verifyUnannouncedDownload(filePath, fileName, signal) {
+    if (!VERIFIABLE_ARCHIVE_EXTENSIONS.has(path.extname(fileName).toLowerCase()) || !this.app.testArchive) return;
+    try {
+      await this.app.testArchive(filePath, { signal });
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      throw new Error("Downloaded archive is damaged or incomplete: " + error.message);
+    }
+  }
+
+  // Removes partial downloads that were never continued so they cannot pile up in the watch folder.
+  async pruneStalePartials(folderPath) {
+    const entries = await fs.readdir(folderPath, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".part")) continue;
+      const fullPath = path.join(folderPath, entry.name);
+      const stats = await fs.stat(fullPath).catch(() => null);
+      if (stats && Date.now() - stats.mtimeMs > STALE_PARTIAL_MS) {
+        await fs.unlink(fullPath).catch(() => {});
+        await fs.unlink(fullPath + ".json").catch(() => {});
       }
     }
   }
@@ -336,7 +492,7 @@ class DownloadService {
         await fileHandle.writeFile(buffer);
         hash?.update(buffer);
         bytesReceived = offset + buffer.length;
-        this.app.updateDownloadJob(jobId, {
+        this.updateDownloadJob(jobId, {
           bytesReceived,
           bytesTotal: bytesTotal || bytesReceived,
           speedBytesPerSecond: bytesReceived
@@ -368,7 +524,7 @@ class DownloadService {
         if (now - lastEmitAt >= DOWNLOAD_PROGRESS_EMIT_INTERVAL_MS) {
           lastEmitAt = now;
           const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001);
-          this.app.updateDownloadJob(jobId, {
+          this.updateDownloadJob(jobId, {
             bytesReceived,
             bytesTotal: bytesTotal || 0,
             speedBytesPerSecond: (bytesReceived - offset) / elapsedSeconds
@@ -377,7 +533,7 @@ class DownloadService {
       }
 
       const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
-      this.app.updateDownloadJob(jobId, {
+      this.updateDownloadJob(jobId, {
         bytesReceived,
         bytesTotal: bytesTotal || bytesReceived,
         speedBytesPerSecond: (bytesReceived - offset) / elapsedSeconds
@@ -395,19 +551,19 @@ class DownloadService {
   }
 
   resolveDownloadFileName({ preferredFileName, resolvedUrl, contentDisposition }) {
-    const explicit = this.app.sanitizeDownloadFileName(preferredFileName);
+    const explicit = this.sanitizeDownloadFileName(preferredFileName);
     if (explicit) {
       return explicit;
     }
 
-    const fromDisposition = this.app.sanitizeDownloadFileName(this.app.extractFileNameFromContentDisposition(contentDisposition));
+    const fromDisposition = this.sanitizeDownloadFileName(this.extractFileNameFromContentDisposition(contentDisposition));
     if (fromDisposition) {
       return fromDisposition;
     }
 
     try {
       const parsed = new URL(resolvedUrl);
-      const fromPath = this.app.sanitizeDownloadFileName(decodeURIComponent(path.basename(parsed.pathname || "")));
+      const fromPath = this.sanitizeDownloadFileName(safeDecode(path.basename(parsed.pathname || "")));
       if (fromPath) {
         return fromPath;
       }
@@ -419,18 +575,22 @@ class DownloadService {
   }
 
   sanitizeDownloadFileName(fileName) {
-    const normalized = path.basename(String(fileName || "").trim()).replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_");
-    return normalized || "";
+    let normalized = String(fileName || "").trim().split(/[\\/]/).pop().replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_");
+    // Windows silently drops trailing dots and spaces and refuses device names such as CON or NUL.
+    normalized = normalized.replace(/[. ]+$/, "");
+    if (!normalized) return "";
+    if (RESERVED_WINDOWS_NAMES.test(path.parse(normalized).name)) normalized = "_" + normalized;
+    return normalized.slice(0, 200);
   }
 
   extractFileNameFromContentDisposition(contentDisposition) {
     const header = String(contentDisposition || "");
-    const starMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+    const starMatch = header.match(/filename\*=(?:UTF-8)?'[^']*'([^;]+)/i);
     if (starMatch?.[1]) {
-      return decodeURIComponent(starMatch[1]);
+      return safeDecode(starMatch[1].trim());
     }
 
-    const plainMatch = header.match(/filename="?([^\";]+)"?/i);
+    const plainMatch = header.match(/filename="?([^";]+)"?/i);
     return plainMatch?.[1] || "";
   }
 
@@ -451,4 +611,41 @@ class DownloadService {
 
 
 }
+function pickValidators(headers) {
+  const etag = String(headers.get("etag") || "").trim();
+  return {
+    // If-Range only accepts strong validators.
+    etag: etag && !etag.startsWith("W/") ? etag : "",
+    lastModified: String(headers.get("last-modified") || "").trim()
+  };
+}
+
+function hasValidators(validators) {
+  return Boolean(validators?.etag || validators?.lastModified);
+}
+
+// A usable continuation is a 206 whose Content-Range starts exactly at the first missing byte.
+function isContinuation(response, offset) {
+  if (response.status !== 206) return false;
+  const match = String(response.headers.get("content-range") || "").match(/^bytes\s+(\d+)-/i);
+  return !match || Number(match[1]) === offset;
+}
+
+async function discardBody(response) {
+  try { await response.body?.cancel(); } catch { /* body already consumed or locked */ }
+}
+
+function hashFileInto(hash, filePath, length) {
+  return new Promise((resolve, reject) => {
+    const stream = require("fs").createReadStream(filePath, { end: length - 1 });
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+}
+
+function safeDecode(value) {
+  try { return decodeURIComponent(value); } catch { return String(value); }
+}
+
 module.exports = { DownloadService };

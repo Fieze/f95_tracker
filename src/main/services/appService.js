@@ -5,7 +5,7 @@ const { OperationGate } = require("./operationGate");
 const { ArchiveQueue } = require("./archiveQueue");
 const { atomicWrite } = require("./safeFiles");
 const { DatabaseService } = require("./db");
-const { archiveHasSingleRootDirectory, extractArchiveWithProgress } = require("./extractor");
+const { archiveHasSingleRootDirectory, extractArchiveWithProgress, testArchive } = require("./extractor");
 const { FolderWatcher } = require("./folderWatcher");
 const { parseThread } = require("./parser");
 const { SyncScheduler } = require("./syncScheduler");
@@ -61,9 +61,6 @@ class AppService {
     this.startupRefreshPromise = null;
     this.downloadFetch = downloadFetch || ((...args) => fetch(...args));
     this.launchProcess = launchProcess || require("child_process").spawn;
-    this.downloadJobs = [];
-    this.nextDownloadJobId = 1;
-    this.activeDownloadControllers = new Map();
     this.processedArchiveRemovalTimers = new Map();
     this.folderSyncInFlight = false;
     this.lastManagedFolderPollAt = 0;
@@ -80,6 +77,8 @@ class AppService {
     this.fetcher = new ThreadFetcher(authSession, fetcherOptions);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
     this.extractArchiveWithProgress = extractArchiveWithProgress;
+    this.testArchive = testArchive;
+    this.archivePasswords = new Map();
     this.folderWatcher = folderWatcher || new FolderWatcher({
       onArchiveDetected: async (payload) => this.processArchive(payload)
     });
@@ -89,11 +88,16 @@ class AppService {
     });
   }
 
+  // Download jobs live in the download service; this keeps the list readable for callers that used the old field.
+  get downloadJobs() { return this.downloadService.listDownloadJobs(); }
+  set downloadJobs(jobs) { this.downloadService.replaceJobs(jobs); }
+
   async initialize() {
     await this.logger.info("Initializing application service.", {
       userDataPath: this.userDataPath
     });
     await this.db.initialize();
+    await this.downloadService.loadPersistedJobs();
     await this.removeLegacyApiKey();
     await this.db.resetInterruptedArchiveJobs();
     await this.pruneMissingArchiveJobs();
@@ -136,7 +140,9 @@ class AppService {
     const settings = await this.db.saveSettings({
       watchFolder: payload.installRoot ? payload.watchFolder : payload.watchFolder,
       installRoot: payload.installRoot,
-      syncIntervalMinutes: payload.syncIntervalMinutes
+      syncIntervalMinutes: payload.syncIntervalMinutes,
+      keepArchives: payload.keepArchives === undefined ? undefined : Boolean(payload.keepArchives),
+      extraDownloadHosts: payload.extraDownloadHosts === undefined ? undefined : String(payload.extraDownloadHosts)
     });
     await this.applyRuntimeSettings(settings);
     await this.pollManagedFolders({ emitOnChange: false });
@@ -198,7 +204,7 @@ class AppService {
       throw new Error("Import path is required.");
     }
 
-    if (this.archiveQueue.busy || this.downloadJobs.some((job) => ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status))) {
+    if (this.archiveQueue.busy || this.downloadService.hasActiveJobs()) {
       throw new Error("Finish downloads and archive jobs before importing data.");
     }
     return this.gate.runExclusive(async () => {
@@ -706,8 +712,7 @@ class AppService {
   }
 
   assertGameIdle(gameId) {
-    if (this.archiveQueue.hasGame(gameId) || this.downloadJobs.some((job) => job.gameId === Number(gameId) &&
-      ["opening_host", "awaiting_download", "resolving", "downloading"].includes(job.status))) {
+    if (this.archiveQueue.hasGame(gameId) || this.downloadService.hasActiveJobs(gameId)) {
       throw new Error("Finish downloads and archive jobs for this game first.");
     }
   }
@@ -728,31 +733,18 @@ class AppService {
     this.stopBackupScheduler();
     this.extractionAbort?.abort();
     this.fetcher.abort?.();
-    for (const controller of this.activeDownloadControllers.values()) controller.abort();
+    for (const controller of this.downloadService.controllers.values()) controller.abort();
     await this.logger.info("Disposing application service.");
     if (this.activeExtractionHandle?.terminate) {
       await this.activeExtractionHandle.terminate();
       this.activeExtractionHandle = null;
     }
-    for (const controller of this.activeDownloadControllers.values()) {
-      controller.abort();
-    }
-    this.activeDownloadControllers.clear();
+    this.downloadService.controllers.clear();
     for (const timer of this.processedArchiveRemovalTimers.values()) {
       clearTimeout(timer);
     }
     this.processedArchiveRemovalTimers.clear();
-    this.downloadJobs = this.downloadJobs.map((job) => {
-      if (["downloading", "resolving", "opening_host", "awaiting_download"].includes(job.status)) {
-        return {
-          ...job,
-          status: "canceled",
-          errorMessage: "Download was interrupted when the app closed.",
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return job;
-    });
+    await this.downloadService.interruptAndPersist();
     await this.folderWatcher.stop();
     if (this.currentExtraction?.jobId) {
       await this.db.updateArchiveJob(this.currentExtraction.jobId, {
@@ -920,6 +912,8 @@ const delegatedMethods = {
     "cancelProcessedArchiveRemoval",
     "processArchive",
     "resolveArchiveMatch",
+    "setArchivePassword",
+    "retireArchive",
     "extractJob",
     "runExtractJob",
     "estimateExtractionDurationMs",
@@ -934,7 +928,7 @@ for (const [service, names] of Object.entries(delegatedMethods)) {
 }
 
 // Gate top-level operations; nested calls retain the same operation context.
-for (const name of ["bootstrap","getState","updateSettings","exportDataToFile","deleteGame","setInstalledVersion","updateGameFolderVersion","updateGameSeasons","updateGameFolderMetadata","deleteGameFolder","refreshGameFolders","listLaunchExecutables","launchExecutable","moveInstallPathToExpected","addThread","addExistingFolder","refreshGame","refreshAllGames","deleteArchiveFile","processArchive","resolveArchiveMatch","extractJob","startResolvedDownload","logout","pollManagedFolders","createBackup","syncGameFolders","syncAllManagedFolders","pruneMissingArchiveJobs"]) {
+for (const name of ["bootstrap","getState","updateSettings","exportDataToFile","deleteGame","setInstalledVersion","updateGameFolderVersion","updateGameSeasons","updateGameFolderMetadata","deleteGameFolder","refreshGameFolders","listLaunchExecutables","launchExecutable","moveInstallPathToExpected","addThread","addExistingFolder","refreshGame","refreshAllGames","deleteArchiveFile","processArchive","resolveArchiveMatch","setArchivePassword","extractJob","startResolvedDownload","logout","pollManagedFolders","createBackup","syncGameFolders","syncAllManagedFolders","pruneMissingArchiveJobs"]) {
   const operation = AppService.prototype[name];
   AppService.prototype[name] = async function (...args) { return this.gate.run(() => operation.apply(this, args)); };
 }

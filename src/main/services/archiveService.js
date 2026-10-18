@@ -213,7 +213,8 @@ class ArchiveService {
       const installDirectory = buildInstallDirectory(state.settings.installRoot, game.title);
       await assertNoLinks(installDirectory);
       await fs.mkdir(installDirectory, { recursive: true });
-      const archiveHasSingleRootFolder = await this.app.archiveHasSingleRootDirectory(job.archivePath, { signal: this.app.extractionAbort.signal });
+      const password = this.app.archivePasswords.get(job.id) || "";
+      const archiveHasSingleRootFolder = await this.app.archiveHasSingleRootDirectory(job.archivePath, { signal: this.app.extractionAbort.signal, password });
       const versionForFolder = sanitizePathSegment(detectedVersion || game.currentVersion || "files");
       stagingDirectory = path.join(state.settings.installRoot, ".f95-staging", "job-" + job.id + "-" + crypto.randomUUID());
       await assertNoLinks(stagingDirectory);
@@ -253,7 +254,7 @@ class ArchiveService {
       });
       this.app.activeExtractionHandle = this.app.extractArchiveWithProgress(job.archivePath, targetDirectory, (progress) => {
         this.app.updateExtractionProgress(progress);
-      }, { signal: this.app.extractionAbort.signal });
+      }, { signal: this.app.extractionAbort.signal, password });
       await this.app.activeExtractionHandle.completion;
       if (this.app.extractionAbort.signal.aborted) throw Object.assign(new Error("Extraction interrupted."), { name: "AbortError" });
       await assertSafeTree(targetDirectory);
@@ -295,8 +296,9 @@ class ArchiveService {
         extractedTo: publishedDirectory,
         errorText: null
       });
+      this.app.archivePasswords.delete(job.id);
       this.app.scheduleProcessedArchiveRemoval(job.id);
-      await fs.unlink(job.archivePath).catch(() => {});
+      await this.retireArchive(job.archivePath, state.settings.keepArchives);
       await this.app.extractionLogger.info("Archive extraction completed.", {
         jobId: job.id,
         gameId,
@@ -308,11 +310,18 @@ class ArchiveService {
       });
     } catch (error) {
       this.app.cancelProcessedArchiveRemoval(job.id);
+      let errorText = error.message;
+      if (error.code === "ARCHIVE_PASSWORD") {
+        // A stored password that 7-Zip rejected is dropped so the prompt can ask again.
+        if (this.app.archivePasswords.delete(job.id)) errorText = "The password was not accepted. Enter the password to extract this archive.";
+      } else {
+        this.app.archivePasswords.delete(job.id);
+      }
       await this.app.db.updateArchiveJob(job.id, {
         status: error.name === "AbortError" || this.app.gate.closed ? "queued" : "failed",
         gameId,
         detectedVersion,
-        errorText: error.message
+        errorText
       });
       await this.app.extractionLogger.error("Archive extraction failed.", {
         jobId: job.id,
@@ -332,6 +341,39 @@ class ArchiveService {
     }
   }
 
+  // After a successful install the source archive is either deleted or, if the user wants to keep it, moved to an
+  // "Extracted" subfolder. The folder watcher does not look into subfolders, so the archive is not picked up again.
+  async retireArchive(archivePath, keep) {
+    if (!keep) {
+      await fs.unlink(archivePath).catch(() => {});
+      return;
+    }
+    try {
+      const keepDirectory = path.join(path.dirname(archivePath), "Extracted");
+      await fs.mkdir(keepDirectory, { recursive: true });
+      const parsed = path.parse(archivePath);
+      let candidate = path.join(keepDirectory, parsed.base);
+      for (let counter = 1; await this.app.assetExists(candidate); counter++) {
+        candidate = path.join(keepDirectory, parsed.name + " (" + counter + ")" + parsed.ext);
+      }
+      await fs.rename(archivePath, candidate);
+    } catch (error) {
+      await this.app.extractionLogger.warn("Could not move the extracted archive; leaving it in place.", { archivePath, message: error.message });
+    }
+  }
+
+  // The password is kept in memory only, for this job, and sent to 7-Zip for the next extraction attempt.
+  async setArchivePassword({ jobId, password }) {
+    const job = this.app.db.listArchiveJobs().find((entry) => entry.id === Number(jobId));
+    if (!job) throw new Error("Archive job not found.");
+    if (!job.gameId) throw new Error("Choose a game for this archive first.");
+    if (!String(password || "")) throw new Error("A password is required.");
+    this.app.archivePasswords.set(job.id, String(password));
+    await this.app.extractJob(job.id, job.gameId, job.detectedVersion);
+    this.app.emitChange();
+    return this.app.getState();
+  }
+
   estimateExtractionDurationMs(archivePath, sizeBytes) {
     const extension = path.extname(archivePath).toLowerCase();
     const sizeMb = Math.max(1, sizeBytes / (1024 * 1024));
@@ -348,9 +390,17 @@ class ArchiveService {
     const elapsedMs = Date.now() - new Date(this.app.currentExtraction.startedAt).getTime();
     const processedFiles = Number(progress.processedFiles || 0);
     const totalFiles = Number(progress.totalFiles || 0);
+    const processedBytes = Number(progress.processedBytes || 0);
+    const totalBytes = Number(progress.totalBytes || 0);
+    // 7-Zip's own percentage is the most direct signal; otherwise measure by bytes, then by file count.
+    const percent = Number.isFinite(progress.percent) ? progress.percent : this.app.currentExtraction.percent;
+    let fraction = 0;
+    if (Number.isFinite(percent)) fraction = percent / 100;
+    else if (totalBytes > 0) fraction = processedBytes / totalBytes;
+    else if (totalFiles > 0) fraction = processedFiles / totalFiles;
     const estimatedRemainingMs =
-      processedFiles > 0 && totalFiles > 0
-        ? Math.max(0, Math.round((elapsedMs / processedFiles) * (totalFiles - processedFiles)))
+      fraction > 0.02
+        ? Math.max(0, Math.round((elapsedMs / fraction) * (1 - Math.min(fraction, 1))))
         : this.app.currentExtraction.estimatedTotalMs;
 
     this.app.currentExtraction = {
@@ -358,6 +408,9 @@ class ArchiveService {
       currentFile: progress.currentFile || this.app.currentExtraction.currentFile,
       processedFiles,
       totalFiles,
+      processedBytes,
+      totalBytes,
+      percent,
       estimatedRemainingMs
     };
     const shouldEmit =

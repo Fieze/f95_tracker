@@ -11,6 +11,7 @@ require("./db.test");
 require("./matcher.test");
 require("./extractor.test");
 require("./appService.test");
+require("./downloads.test");
 require("./parser.test");
 require("./sevenZip.test");
 require("./safety.test");

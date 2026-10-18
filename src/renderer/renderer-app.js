@@ -2,7 +2,9 @@ const state = {
   settings: {
     watchFolder: "",
     installRoot: "",
-    syncIntervalMinutes: 30
+    syncIntervalMinutes: 30,
+    keepArchives: false,
+    extraDownloadHosts: ""
   },
   auth: {
     loggedIn: false,
