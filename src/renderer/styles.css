@@ -353,8 +353,8 @@ body {
 
 .topbar-brand img {
   display: block;
-  width: 72px;
-  height: 72px;
+  height: 68px;
+  width: auto;
 }
 
 .topbar-stats {
@@ -2205,8 +2205,7 @@ textarea:focus-visible {
   }
 
   .topbar-brand img {
-    width: 56px;
-    height: 56px;
+    height: 52px;
   }
 
   .library-toolbar {
