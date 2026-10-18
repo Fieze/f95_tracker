@@ -99,7 +99,8 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 
 - The app runs a bridge on `127.0.0.1` (first free port from 47950 to 47959, loopback only). The extension finds it by itself.
 - On first use the overlay shows "Connect to F95 Tracker"; the app then asks you to allow the extension once. After that every request carries a token, the Host must be a loopback name and the Origin must be a browser extension.
-- Try it: open `about:debugging` in Firefox, choose "This Firefox" > "Load Temporary Add-on" and select `extensions/firefox/manifest.json`. The app must be running.
+- Install: the release page offers `f95-tracker-companion-<version>.xpi`. Release Firefox only installs signed add-ons; the release workflow signs it when the `AMO_JWT_ISSUER` and `AMO_JWT_SECRET` repository secrets (Mozilla add-on API keys) exist, otherwise it attaches an `-unsigned.xpi` that works in Developer Edition and Nightly. `npm.cmd run build:extension` builds it locally into `dist/`.
+- Try it without installing: open `about:debugging` in Firefox, choose "This Firefox" > "Load Temporary Add-on" and select `extensions/firefox/manifest.json`. The app must be running.
 
 ## Typical Workflow
 

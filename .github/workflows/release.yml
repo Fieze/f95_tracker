@@ -31,6 +31,25 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The Firefox extension ships as an .xpi. Release Firefox only installs add-ons signed by Mozilla, so the file
+      # is signed (unlisted channel) when the AMO_JWT_ISSUER / AMO_JWT_SECRET repository secrets exist; otherwise the
+      # unsigned build is attached for Developer Edition, Nightly and temporary loading.
+      - name: Build and attach Firefox extension
+        shell: bash
+        run: |
+          node scripts/build-extension.js
+          if [ -n "$AMO_JWT_ISSUER" ] && [ -n "$AMO_JWT_SECRET" ]; then
+            npx --yes web-ext@8 sign --source-dir dist/extension-stage --artifacts-dir dist/signed \
+              --channel unlisted --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET"
+            cp dist/signed/*.xpi "dist/f95-tracker-companion-${GITHUB_REF_NAME#v}.xpi"
+            gh release upload "$GITHUB_REF_NAME" "dist/f95-tracker-companion-${GITHUB_REF_NAME#v}.xpi" --clobber
+          else
+            gh release upload "$GITHUB_REF_NAME" dist/f95-tracker-companion-*-unsigned.xpi --clobber
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
       - name: Publish release
         shell: bash
         run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

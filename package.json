@@ -9,6 +9,7 @@
     "test": "node test/run.js",
     "test:ui": "electron test/electronSmoke.js",
     "build": "electron-builder --win --publish never",
+    "build:extension": "node scripts/build-extension.js",
     "lint": "eslint .",
     "test:loader": "electron test/electronLoader.js",
     "audit:ui": "electron test/uiAudit.js"
