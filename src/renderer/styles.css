@@ -1869,7 +1869,19 @@ button:hover,
 .developer-links.hidden,
 .changelog-section.hidden,
 .history-section.hidden,
-#add-folder-url-label.hidden {
+#add-folder-url-label.hidden,
+#drop-import-url-label.hidden,
+#drop-import-mode.hidden {
+  display: none;
+}
+
+.drop-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.drop-import-actions .hidden {
   display: none;
 }
 

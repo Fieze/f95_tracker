@@ -1,4 +1,20 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
+
+// Files dragged in from Explorer: the real paths are only available here, so the drop is handled in the preload
+// and only the list of paths is handed to the page.
+const dropHandlers = [];
+const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragover", (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+});
+window.addEventListener("drop", (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  const paths = [...event.dataTransfer.files].map((file) => webUtils.getPathForFile(file)).filter(Boolean);
+  if (paths.length) dropHandlers.forEach((handler) => handler(paths));
+});
 
 contextBridge.exposeInMainWorld("f95App", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
@@ -31,6 +47,9 @@ contextBridge.exposeInMainWorld("f95App", {
   startDownload: (payload) => ipcRenderer.invoke("downloads:start", payload),
   cancelDownload: (jobId) => ipcRenderer.invoke("downloads:cancel", { jobId }),
   addExistingFolder: (payload) => ipcRenderer.invoke("folders:addExisting", payload),
+  inspectDroppedPaths: (paths) => ipcRenderer.invoke("drop:inspect", { paths }),
+  addDroppedArchive: (payload) => ipcRenderer.invoke("drop:addArchive", payload),
+  onFilesDropped: (handler) => { dropHandlers.push(handler); },
   dismissActivity: (activityId) => ipcRenderer.invoke("activities:dismiss", activityId),
   openLink: (url) => ipcRenderer.invoke("links:open", url),
   onStateChanged: (handler) => ipcRenderer.on("state:changed", handler)

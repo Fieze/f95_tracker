@@ -6,18 +6,20 @@ const { ArchiveQueue } = require("./archiveQueue");
 const { atomicWrite } = require("./safeFiles");
 const { DatabaseService } = require("./db");
 const { archiveHasSingleRootDirectory, extractArchiveWithProgress, testArchive } = require("./extractor");
-const { FolderWatcher } = require("./folderWatcher");
+const { FolderWatcher, hashFile } = require("./folderWatcher");
+const { extractVersionFromFilename, findBestGameMatch } = require("./matcher");
 const { parseThread } = require("./parser");
 const { SyncScheduler } = require("./syncScheduler");
 const { ThreadFetcher } = require("./threadFetcher");
 const { noopLogger } = require("./logger");
-const { normalizeThreadUrl } = require("./utils");
+const { normalizeThreadUrl, sanitizeVersion } = require("./utils");
 
 const MANAGED_FOLDER_POLL_INTERVAL_MS = 15000;
 const BACKUP_INTERVAL_MS = 15 * 60 * 1000;
 const BACKUP_RETENTION_COUNT = 3;
 const ASSET_DOWNLOAD_CONCURRENCY = 4;
 const FINISHED_ACTIVITY_VISIBLE_MS = 4000;
+const ARCHIVE_PATTERN = /\.(zip|rar|7z)$/i;
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess, fetcherOptions }) {
@@ -73,6 +75,8 @@ class AppService {
     this.activityTimers = new Map();
     this.pendingThreadUrls = new Set();
     this.pendingFolderPaths = new Set();
+    // Archives the user dropped in from elsewhere: kept after extraction instead of being deleted/moved.
+    this.keepSourceArchives = new Set();
     this.addThreadQueue = Promise.resolve();
     this.fetcher = new ThreadFetcher(authSession, fetcherOptions);
     this.archiveHasSingleRootDirectory = archiveHasSingleRootDirectory;
@@ -329,7 +333,7 @@ class AppService {
 
   // Adds an existing game folder (to a library game or a new one from a thread URL) in the background.
   // The folder is validated right away so mistakes show up in the dialog; moving and importing report in the status line.
-  async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "" } = {}) {
+  async addExistingFolderInBackground({ folderPath, mode = "keep", gameId = null, threadUrl = "", version = "" } = {}) {
     if (!["keep", "move"].includes(mode)) throw new Error("Unknown option for the folder.");
     let existingGame = null;
     let normalizedUrl = "";
@@ -350,12 +354,86 @@ class AppService {
       try {
         const game = existingGame || (await this.addThread(normalizedUrl));
         this.updateActivity(activityId, { label: `${verb} folder ${source.folderName} to ${game.title}` });
-        await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode });
+        await this.addExistingFolder({ folderPath: source.folderPath, gameId: game.id, mode, version });
         const moved = mode === "move" && !(await this.assetExists(source.folderPath));
         this.finishActivity(activityId, { message: `${moved ? "Moved" : "Added"} ${source.folderName} (${game.title})` });
       } catch (error) {
         this.finishActivity(activityId, { error: error.message });
         await this.logger.error("Adding an existing folder failed.", { folderPath: source.folderPath, message: error.message });
+      } finally {
+        this.pendingFolderPaths.delete(key);
+      }
+    };
+    this.addThreadQueue = this.addThreadQueue.then(run, run);
+    return { queued: true, activityId };
+  }
+
+  // Describes items dropped onto the window: what they are, the best matching library game and a guessed version.
+  async inspectDroppedPaths(paths) {
+    const games = this.db.getGames();
+    const items = [];
+    for (const raw of (Array.isArray(paths) ? paths : []).slice(0, 20)) {
+      const value = String(raw || "");
+      if (!path.isAbsolute(value)) continue;
+      const resolved = path.resolve(value);
+      const name = path.basename(resolved);
+      const stats = await fs.stat(resolved).catch(() => null);
+      const kind = stats?.isDirectory() ? "folder" : stats?.isFile() && ARCHIVE_PATTERN.test(name) ? "archive" : "unsupported";
+      let game = null;
+      if (kind !== "unsupported") {
+        const match = findBestGameMatch(name, games);
+        const best = match.bestMatch;
+        if (best && (match.kind === "matched" || best.score >= 30)) game = games.find((entry) => entry.id === best.gameId) || null;
+      }
+      items.push({
+        path: resolved,
+        name,
+        kind,
+        gameId: game ? game.id : null,
+        version: kind === "unsupported" ? null : extractVersionFromFilename(name, game || {})
+      });
+    }
+    return items;
+  }
+
+  // Registers an archive from anywhere on disk for a game (existing or new from a thread URL). With `extract` it is
+  // also unpacked into the install root. The original file is never deleted or moved.
+  async addDroppedArchiveInBackground({ archivePath, gameId = null, threadUrl = "", version = "", extract = false } = {}) {
+    const resolved = path.resolve(String(archivePath || ""));
+    if (!path.isAbsolute(String(archivePath || "")) || !ARCHIVE_PATTERN.test(resolved)) throw new Error("Only ZIP, RAR and 7z archives can be added.");
+    if (!(await fs.stat(resolved).catch(() => null))?.isFile()) throw new Error("The selected archive does not exist.");
+    let existingGame = null;
+    let normalizedUrl = "";
+    if (gameId) {
+      existingGame = this.db.getGameById(Number(gameId));
+      if (!existingGame) throw new Error("Game not found.");
+    } else {
+      normalizedUrl = normalizeThreadUrl(threadUrl);
+    }
+    if (extract && !this.db.getSettings().installRoot) throw new Error("Set an install root in Settings before extracting.");
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (this.pendingFolderPaths.has(key)) return { queued: false, duplicate: true };
+    this.pendingFolderPaths.add(key);
+
+    const name = path.basename(resolved);
+    const activityId = this.startActivity("add-folder", `${extract ? "Extracting" : "Adding"} archive ${name}`);
+    const run = async () => {
+      try {
+        const game = existingGame || (await this.addThread(normalizedUrl));
+        this.updateActivity(activityId, { label: `${extract ? "Extracting" : "Adding"} archive ${name} to ${game.title}` });
+        const archiveHash = await hashFile(resolved);
+        this.folderWatcher.ignoreFile(resolved, 45000);
+        this.keepSourceArchives.add(key);
+        const job = await this.processArchive({
+          archivePath: resolved, archiveName: name, archiveHash, gameId: game.id,
+          detectedVersion: sanitizeVersion(version) || null, autoExtract: Boolean(extract)
+        });
+        this.finishActivity(activityId, {
+          message: extract && job?.status !== "processed" ? `Extracting ${name} (${game.title})` : `Added archive ${name} (${game.title})`
+        });
+      } catch (error) {
+        this.finishActivity(activityId, { error: error.message });
+        await this.logger.error("Adding an archive failed.", { archivePath: resolved, message: error.message });
       } finally {
         this.pendingFolderPaths.delete(key);
       }

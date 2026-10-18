@@ -134,6 +134,7 @@ function renderOverlays() {
   $("#login-panel")?.classList.toggle("hidden", !loginOpen);
   $("#add-thread-panel")?.classList.toggle("hidden", !addThreadOpen);
   $("#add-folder-panel")?.classList.toggle("hidden", !addFolderOpen);
+  $("#drop-import-panel")?.classList.toggle("hidden", state.openOverlay !== "drop-import");
   $("#game-details-panel")?.classList.toggle("hidden", !gameDetailsOpen);
   $("#edit-folder-panel")?.classList.toggle("hidden", !editFolderOpen);
   $("#overlay-backdrop")?.classList.toggle("hidden", !state.openOverlay);
@@ -251,6 +252,7 @@ async function initialize() {
   syncTopbarHeight();
   window.addEventListener("resize", syncTopbarHeight);
   initAddFolderPanel();
+  initDropImport();
   $("#setup-hint-action").addEventListener("click", () => { state.openOverlay = "settings"; render(); });
   $("#settings-form").addEventListener("submit", handleSettingsSubmit);
   document.querySelectorAll(".browse-folder-button").forEach((button) => {
@@ -313,6 +315,8 @@ async function initialize() {
       state.openOverlay = state.selectedGameId ? "game-details" : null;
     } else if (state.openOverlay === "add-folder") {
       closeAddFolderPanel();
+    } else if (state.openOverlay === "drop-import") {
+      dismissDropImport();
     } else if (state.openOverlay === "game-details") {
       state.selectedGameId = null;
       state.editingFolderId = null;

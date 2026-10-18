@@ -5,6 +5,7 @@ const OVERLAY_PANELS = {
   login: "#login-panel",
   "add-thread": "#add-thread-panel",
   "add-folder": "#add-folder-panel",
+  "drop-import": "#drop-import-panel",
   "game-details": "#game-details-panel",
   "edit-folder": "#edit-folder-panel"
 };

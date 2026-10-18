@@ -173,3 +173,39 @@ test("a folder already inside the game's folder is simply added; the game's own 
   assert.ok(await exists(path.join(inside, "Game.exe")), "nothing was moved");
   assert.deepEqual(updated.folders.map((entry) => entry.folderPath), [inside]);
 });
+
+test("a version chosen in the dialog overrides the one guessed from the folder name", async (t) => {
+  const { service, game, makeFolder } = await setup(t);
+  const folder = await makeFolder("Example Game v0.1.4.0");
+  const updated = await service.addExistingFolder({ folderPath: folder, gameId: game.id, mode: "keep", version: "0.2" });
+  assert.equal(updated.folders[0].version, "0.2");
+});
+
+test("dropped items are classified and matched to a library game by name", async (t) => {
+  const { service, game, dirs, makeFolder } = await setup(t);
+  const folder = await makeFolder("Example Game v0.1.3");
+  const archive = path.join(dirs.library, "Example Game v0.1.3.zip");
+  const other = path.join(dirs.library, "notes.txt");
+  await fs.writeFile(archive, "zip");
+  await fs.writeFile(other, "text");
+  const items = await service.inspectDroppedPaths([folder, archive, other, "relative/path"]);
+  assert.deepEqual(items.map((item) => item.kind), ["folder", "archive", "unsupported"]);
+  assert.equal(items[0].gameId, game.id);
+  assert.equal(items[0].version, "0.1.3");
+  assert.equal(items[1].gameId, game.id);
+});
+
+test("a dropped archive is registered for the game and stays where it is", async (t) => {
+  const { service, game, dirs } = await setup(t);
+  const archive = path.join(dirs.library, "Example Game v0.1.3.zip");
+  await fs.writeFile(archive, "not really a zip");
+  const result = await service.addDroppedArchiveInBackground({ archivePath: archive, gameId: game.id, version: "0.1.3", extract: false });
+  assert.equal(result.queued, true);
+  await waitForActivity(service, (activity) => activity.id === result.activityId && activity.status === "done");
+  const jobs = (await service.getState()).archiveJobs;
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].gameId, game.id);
+  assert.equal(jobs[0].detectedVersion, "0.1.3");
+  assert.ok(await exists(archive), "the original archive is untouched");
+  await assert.rejects(() => service.addDroppedArchiveInBackground({ archivePath: path.join(dirs.library, "x.txt"), gameId: game.id }), /ZIP, RAR and 7z/);
+});

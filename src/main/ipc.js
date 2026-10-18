@@ -82,6 +82,8 @@ function bindIpc() {
   handle("auth:verify", async () => ctx.appService.verifyAuth());
   handle("games:addThread", async (_event, payload) => ctx.appService.addThreadInBackground(payload.url));
   handle("folders:addExisting", async (_event, payload) => ctx.appService.addExistingFolderInBackground(payload));
+  handle("drop:inspect", async (_event, payload) => ctx.appService.inspectDroppedPaths(payload?.paths));
+  handle("drop:addArchive", async (_event, payload) => ctx.appService.addDroppedArchiveInBackground(payload));
   handle("activities:dismiss", async (_event, activityId) => ctx.appService.dismissActivity(Number(activityId)));
   handle("games:delete", async (_event, gameId) => ctx.appService.deleteGame(gameId));
   handle("games:refresh", async (_event, gameId) => ctx.appService.refreshGame(gameId));

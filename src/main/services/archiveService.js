@@ -298,7 +298,8 @@ class ArchiveService {
       });
       this.app.archivePasswords.delete(job.id);
       this.app.scheduleProcessedArchiveRemoval(job.id);
-      await this.retireArchive(job.archivePath, state.settings.keepArchives);
+      const sourceKey = process.platform === "win32" ? job.archivePath.toLowerCase() : job.archivePath;
+      if (!this.app.keepSourceArchives.delete(sourceKey)) await this.retireArchive(job.archivePath, state.settings.keepArchives);
       await this.app.extractionLogger.info("Archive extraction completed.", {
         jobId: job.id,
         gameId,

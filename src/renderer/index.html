@@ -248,6 +248,47 @@
       </form>
     </section>
 
+    <section id="drop-import-panel" class="overlay-panel hidden" role="dialog" aria-modal="true" aria-labelledby="drop-import-title">
+      <div class="overlay-panel-header">
+        <div>
+          <p class="overlay-eyebrow" id="drop-import-eyebrow">Import</p>
+          <h3 id="drop-import-title">Add Dropped Folder</h3>
+        </div>
+        <button class="overlay-close" type="button" data-close-overlay aria-label="Close import">Close</button>
+      </div>
+      <form id="drop-import-form" class="overlay-form">
+        <p id="drop-import-source" class="overlay-hint"></p>
+        <label>
+          Game
+          <select name="gameId"></select>
+        </label>
+        <label id="drop-import-url-label">
+          Thread URL
+          <input name="threadUrl" type="url" placeholder="https://f95zone.to/threads/..." />
+        </label>
+        <label>
+          Version
+          <input name="version" type="text" placeholder="e.g. 0.5.2" />
+        </label>
+        <fieldset class="folder-mode" id="drop-import-mode">
+          <legend>What should happen to the folder?</legend>
+          <label class="radio-option">
+            <input type="radio" name="mode" value="keep" checked />
+            <span><strong>Add it where it is</strong><small>The folder stays in its current location.</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="mode" value="move" />
+            <span><strong>Move it into the install root</strong><small id="drop-import-destination"></small></span>
+          </label>
+        </fieldset>
+        <div class="drop-import-actions">
+          <button id="drop-import-skip" class="secondary hidden" type="button">Skip</button>
+          <button id="drop-import-add" class="primary" type="submit" data-action="add">Add Folder</button>
+          <button id="drop-import-extract" class="primary hidden" type="submit" data-action="extract">Extract</button>
+        </div>
+      </form>
+    </section>
+
     <section id="game-details-panel" class="overlay-panel overlay-panel-centered game-details-panel hidden" role="dialog" aria-modal="true" aria-labelledby="game-details-panel-title">
       <div class="overlay-panel-header">
         <div>
@@ -471,6 +512,7 @@
     <script src="./activities.js"></script>
     <script src="./status-line.js"></script>
     <script src="./add-folder.js"></script>
+    <script src="./drop-import.js"></script>
     <script src="./overlay-focus.js"></script>
     <script src="./settings.js"></script>
     <script src="./renderer-bootstrap.js"></script>

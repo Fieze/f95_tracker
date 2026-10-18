@@ -458,7 +458,8 @@ class InstallationService {
   }
 
   // Registers an existing game folder for a game, optionally moving it into <install root>/<game title>/.
-  async addExistingFolder({ folderPath, gameId, mode = "keep" }) {
+  // An explicit `version` (typed or confirmed by the user) wins over the one inferred from the folder name.
+  async addExistingFolder({ folderPath, gameId, mode = "keep", version: explicitVersion = "" }) {
     const game = this.app.db.getGameById(Number(gameId));
     if (!game) throw new Error("Game not found.");
     const source = await this.app.validateExistingFolder(folderPath, mode, game);
@@ -491,12 +492,13 @@ class InstallationService {
       rootOverride = gameRoot;
     }
 
-    const version = extractVersionFromFilename(source.folderName, {
+    const manualVersion = sanitizeVersion(explicitVersion);
+    const version = manualVersion || extractVersionFromFilename(source.folderName, {
       currentVersion: game.currentVersion,
       installedVersion: game.installedVersion
     });
     await this.app.db.upsertGameFolder(game.id, {
-      folderName: source.folderName, folderPath: finalPath, version, versionSource: "inferred"
+      folderName: source.folderName, folderPath: finalPath, version, versionSource: manualVersion ? "manual" : "inferred"
     });
     await this.app.syncGameFolders(game.id, { game: this.app.db.getGameById(game.id), rootOverride });
     this.app.emitChange();

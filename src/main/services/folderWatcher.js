@@ -112,5 +112,6 @@ async function hashFile(filePath) {
 }
 
 module.exports = {
-  FolderWatcher
+  FolderWatcher,
+  hashFile
 };
