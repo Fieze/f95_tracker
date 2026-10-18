@@ -834,7 +834,8 @@ test("updating only seasonFinal keeps existing sort ranks stable", async (t) => 
 test("startResolvedDownload requires a configured watch folder", async (t) => {
   const { service, userDataPath } = await createService();
   t.after(async () => {
-    await fs.rm(userDataPath, { recursive: true, force: true });
+    await service.dispose();
+    await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   const job = service.createDownloadJob({
