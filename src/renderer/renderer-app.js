@@ -4,6 +4,8 @@ const state = {
     installRoot: "",
     syncIntervalMinutes: 30,
     keepArchives: false,
+    transferSaves: true,
+    removeOldVersion: true,
     extraDownloadHosts: ""
   },
   auth: {

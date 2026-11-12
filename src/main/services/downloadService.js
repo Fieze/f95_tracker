@@ -223,7 +223,7 @@ class DownloadService {
       });
 
       if (!response.ok) {
-        throw new Error(`Download request failed with status ${response.status}`);
+        throw new Error(await describeFailedResponse(response));
       }
 
       const requestUrl = String(options.url || job.sourceUrl || "").trim();
@@ -295,6 +295,13 @@ class DownloadService {
           await this.discardPartial(targetPath);
           throw error;
         });
+      }
+
+      // A host that publishes the file's checksum (Pixeldrain) lets the finished file be verified bit for bit.
+      const expectedSha256 = String(options.expectedSha256 || "").toLowerCase();
+      if (expectedSha256 && sha256 !== expectedSha256) {
+        await this.discardPartial(targetPath);
+        throw new Error("The downloaded file does not match the checksum published by the host. Please try again.");
       }
 
       await fs.rename(tempPath, targetPath);
@@ -614,6 +621,20 @@ class DownloadService {
 
 
 }
+// Hosts with a JSON API (Pixeldrain) say why a download was refused; that is more useful than the status code.
+async function describeFailedResponse(response) {
+  const fallback = `Download request failed with status ${response.status}`;
+  if (!/json/i.test(response.headers.get("content-type") || "")) return fallback;
+  try {
+    const body = await response.json();
+    const code = String(body?.value || "");
+    if (/captcha/.test(code)) return "The host asks for a captcha before this download. Use \"Open Host\" and download the file there.";
+    return body?.message ? `${fallback}: ${body.message}` : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function pickValidators(headers) {
   const etag = String(headers.get("etag") || "").trim();
   return {

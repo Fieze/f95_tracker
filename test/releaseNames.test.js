@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  branchLabelOfWholeName, expandBranches, extractChangelogVersions, matchVersionOption, parseBranch, parseReleaseName, parseVariant
+  branchLabelOfWholeName, compareBranches, expandBranches, extractChangelogVersions, matchVersionOption, parseBranch, parseReleaseName, parseVariant
 } = require("../src/main/services/releaseNames");
 
 test("chapters, seasons and specials are recognised as branches", () => {
@@ -96,4 +96,32 @@ test("branch states report updates per branch and skip final branches", () => {
   assert.equal(state("Chapter 1").hasUpdate, true);
   assert.equal(state("Chapter 1").latestVersion, "1.2");
   assert.equal(state("Chapter 2").hasUpdate, false, "a final branch is never reported as outdated");
+});
+
+test("parseBranch reads the season, chapter and act spellings used in thread titles", () => {
+  const label = (text) => parseBranch(text)?.label ?? null;
+  assert.equal(label("S2 Ch.10"), "Season 2", "a season wins over a chapter");
+  assert.equal(label("v1.05 S2 Ep. 1 P1"), "Season 2");
+  assert.equal(label("S02E05"), "Season 2");
+  assert.equal(label("Season Two"), "Season 2");
+  assert.equal(label("Ch. IV v1.0"), "Chapter 4");
+  assert.equal(label("Chapter 5.5"), "Chapter 5");
+  assert.equal(label("Act 3 v0.99"), "Act 3");
+  assert.equal(label("Book One"), "Book 1");
+  assert.equal(label("Vol. 2"), "Volume 2");
+  assert.equal(label("Story Part 2 v0.3"), "Part 2");
+  assert.equal(label("Ep.1-6 v0.5.0"), null, "episodes are versions, not branches");
+  assert.equal(label("Marvel's 2"), null);
+  assert.equal(label("Game Chapter v0.5"), null, "a lower-case v is not a roman numeral");
+  assert.equal(label("Game.part1.rar"), null, "split archive parts are not branches");
+  assert.equal(label("Part 1 of 3"), null);
+  assert.equal(parseBranch("v0.5 - act 2 intro added", { extended: false }), null, "loose text only yields seasons and chapters");
+});
+
+test("ranges of seasons and chapters expand, and sort by number", () => {
+  assert.deepEqual(expandBranches("Ch.1 + 2 v2.3"), ["Chapter 1", "Chapter 2"]);
+  assert.deepEqual(expandBranches("Season 1&2 + DLCs"), ["Season 1", "Season 2"]);
+  assert.deepEqual(expandBranches("S1+S2"), ["Season 1", "Season 2"]);
+  assert.equal(branchLabelOfWholeName("Season 1-2"), "Season 1-2");
+  assert.deepEqual(["Chapter 10", "Season 1", "Chapter 2", "Act 1"].sort(compareBranches), ["Chapter 2", "Chapter 10", "Season 1", "Act 1"]);
 });

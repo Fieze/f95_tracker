@@ -377,7 +377,7 @@ function buildGameDetailsCard(selectedGame) {
       const job = getDownloadJobForLink(selectedGame.id, link);
       const status = job?.status || "";
       const busy = ["queued", "opening_host", "awaiting_download", "resolving", "downloading"].includes(status);
-      const supportsDirectDownload = !isSplit && isSupportedDirectDownload(link.url, link.label);
+      const supportsDirectDownload = !isSplit && isSupportedDirectDownload(link.url, link.label, link.host);
       const labelWrap = createNode("div", "download-meta");
       const actions = createNode("div", "download-actions");
       const primaryButton = createNode(
@@ -424,6 +424,7 @@ function buildGameDetailsCard(selectedGame) {
             gameId: selectedGame.id,
             linkId: link.id,
             url: link.url,
+            host: link.host || "",
             label: link.label,
             detectedVersion: groupVersion,
             branch: group.branch || "",

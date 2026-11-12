@@ -19,7 +19,8 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 - Import F95Zone threads by URL.
 - Parse and store thread metadata such as title, developer, engine, release date, overview, tags, screenshots, status, and download groups.
 - Refresh a single game or all tracked games on demand.
-- Run background synchronization on a configurable interval.
+- Run background synchronization on a configurable interval. After the first full pass, a refresh asks the forum's version check for all threads in one request and only reads the threads whose version changed (each thread is still read in full once a day).
+- Recognise chapters, seasons, books, volumes, acts and parts in thread titles and download sections (`S2 Ch.10`, `Ch. IV`, `Season 1&2`, `Act 3`), including older seasons that a thread keeps in spoilers.
 - Show update badges when the thread version is newer than the installed version.
 - Track thread states such as complete, on hold, and abandoned.
 - Store parser warnings and raw debug output for troubleshooting difficult threads.
@@ -33,8 +34,10 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 
 ### Download Management
 
-- Display grouped download links parsed from each thread.
+- Display grouped download links parsed from each thread. Section headings such as `Compressed`, `Sandbox` or `Season 1` become their own groups; the hidden decoy links the forum plants between the real ones are ignored.
 - Start direct in-app downloads for supported hosts such as Pixeldrain and Vikingfile.
+- Forum download links are signed per page load and lead through a short "not a bot" check on F95Zone. The app renews an old link before it is used and shows that check in the download window; it is not skipped or solved by the app.
+- Pixeldrain downloads go through the Pixeldrain API: as soon as the window reaches the Pixeldrain page, the file starts by itself, and the finished file is verified against the SHA-256 Pixeldrain publishes. Files that need a captcha or lists with several archives stay on the page for you.
 - Fall back to opening unsupported hosts in the browser when direct takeover is not possible.
 - Track active downloads in the activity bar.
 - Show live progress, status, file names, and cancellation controls.
@@ -67,6 +70,7 @@ Windows desktop app for tracking F95Zone threads, monitoring updates, managing l
 - Edit install metadata manually when needed.
 - Store per-folder version numbers, preferred executable, season number, and season-final state.
 - Launch games directly from the selected executable.
+- When an update is installed, copy the saves of the previous version into the new one (Ren'Py `game/saves`, RPG Maker `www/save` / `save` / `Save*.rvdata2`, Wolf RPG, Unreal `Saved/SaveGames`) and keep the chosen executable. Both steps can be switched off in the settings.
 - Detect and synchronize managed folders so the app can reflect the real state on disk.
 
 ### Library View And Game Details
@@ -171,7 +175,8 @@ git push origin v1.0.1
 - Database saves are serialized and atomically replaced. The first startup with an existing database preserves `backups/pre-safety-upgrade.sqlite` before migration; regular JSON backups continue separately.
 - Imports are validated in a separate database and backed up before replacement. Finish active operations, downloads, and requested archive jobs before importing.
 - Archive extraction runs through one FIFO queue and validates paths and links before publishing files. Temporary output is kept under `.f95-staging`; only directories marked as belonging to the current app data directory are cleaned up.
-- Every extracted release receives its own versioned installation folder. Existing folders are retained; duplicate versions receive suffixes such as ` (2)`.
+- Every extracted release receives its own versioned installation folder; duplicate versions receive suffixes such as ` (2)`.
+- After an update the version it replaces (the newest older version of the same chapter or season) is removed, unless "Remove the previous version after an update" is switched off. This only happens once every save file was copied and verified, and only if saves were found or the engine keeps them outside the game folder (Ren'Py, Unity, HTML, Godot, Unreal). A folder that is in use, lies outside the install root or shows no saves for an engine that keeps them in the game folder stays, and the status line says why. Mods or other files added to the old folder are removed with it.
 - Installation deletion is restricted to directories inside the configured game roots and rejects symbolic links and junctions. External installations remain visible but cannot be recursively deleted through the app.
 - Closing to the tray retains the existing behavior. Explicit quit stops background work, waits for the actual extraction process to end, and finishes database saves. Interrupted archive jobs can be resumed manually after restart.
 - External browser links accept only HTTP and HTTPS. The main renderer is the only authorized IPC sender.

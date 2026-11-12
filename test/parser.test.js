@@ -203,7 +203,7 @@ test("parseThread finds downloads when win linux mac are combined in one label",
   assert.ok(result.warnings.every((warning) => !/No download links/i.test(warning)));
 });
 
-test("parseThread only uses the first download block after DOWNLOADS and skips spoiler content", () => {
+test("parseThread stops at a second DOWNLOADS heading and keeps spoiler builds apart", () => {
   const html = `
     <html>
       <body>
@@ -228,11 +228,14 @@ test("parseThread only uses the first download block after DOWNLOADS and skips s
   `;
 
   const result = parseThread(html, "https://f95zone.to/threads/example.6/");
-  assert.equal(result.downloadGroups.length, 1);
-  assert.equal(result.downloadGroups[0].label, "Windows");
+  assert.deepEqual(result.downloadGroups.map((group) => group.label), ["Windows", "Windows · More"]);
   assert.deepEqual(
     result.downloadGroups[0].links.map((link) => link.url),
     ["https://example.org/current"]
+  );
+  assert.deepEqual(
+    result.downloadGroups[1].links.map((link) => link.url),
+    ["https://example.org/spoiler"]
   );
 });
 
@@ -576,4 +579,51 @@ test("parseThread groups download rows by chapter heading and variant", () => {
       ["Chapter 2 · Win/Linux · Split", "Chapter 2", "Split", null]
     ]
   );
+});
+
+test("parseThread reads the live link structure: signed links, hosts from favicons and no hidden decoy links", () => {
+  const parsed = parseThread(fixtureHtml("seasons-logged-in"), "https://f95zone.to/threads/example-saga.9/");
+  const links = parsed.downloadGroups.flatMap((group) => group.links);
+  assert.ok(links.every((link) => !/k=decoy/.test(link.url)), "the hidden decoy link is not a download link");
+  assert.ok(!/k=decoy/.test(parsed.rawOpHtml));
+  assert.ok(!/PIXELDRAINPIXELDRAIN/.test(parsed.rawOpText), "decoy text does not leak into labels");
+  const sandbox = parsed.downloadGroups.find((group) => group.label === "Win/Linux · Sandbox");
+  assert.deepEqual(sandbox.links.map((link) => [link.label, link.host]), [["MEGA", "mega.nz"], ["PIXELDRAIN", "pixeldrain.com"]]);
+  assert.match(sandbox.links[1].url, /\/dl\/100\/\?u=1&k=a2&/, "the stored link keeps its signature");
+  assert.ok(!/tok\d/.test(parsed.rawOpHtml), "the stored post has no per-request tokens, so two loads compare equal");
+  assert.deepEqual(parsed.warnings, []);
+});
+
+test("parseThread groups download rows by section headings and reads seasons kept in spoilers", () => {
+  const parsed = parseThread(fixtureHtml("seasons-logged-in"), "https://f95zone.to/threads/example-saga.9/");
+  assert.deepEqual(parsed.downloadGroups.map((group) => group.label), [
+    "Win/Linux · Sandbox",
+    "Win/Linux · VN",
+    "Win · Compatibility",
+    "Season 1 · Win/Linux · Sandbox",
+    "Season 1 · Win/Linux · VN"
+  ]);
+  assert.deepEqual(parsed.downloadGroups.map((group) => group.branch), [null, null, null, "Season 1", "Season 1"]);
+  assert.deepEqual(parsed.titleBranches, ["Season 2"], "the version bracket wins over the game's name");
+  assert.equal(parsed.currentVersion, "S2 v0.7.3");
+});
+
+test("parseThread lists All rows, keeps qualifiers apart and applies a plain heading to the rows below it", () => {
+  const html = `
+    <html><body>
+      <h1 class="p-title-value">[HTML] Heading Test [v0.4]</h1>
+      <article class="message-threadStarterPost"><div class="message-body"><div class="bbWrapper">
+        <b>DOWNLOAD</b><br>
+        All (Placeholder): <a href="https://example.org/placeholder">MEGA</a><br>
+        All (Public): <a href="https://example.org/public">MEGA</a><br>
+        Others: <a href="https://example.org/online">Online</a><br>
+        Compressed<br>
+        Win: <a href="https://example.org/win-small">PIXELDRAIN</a><br>
+        Linux: <a href="https://example.org/linux-small">PIXELDRAIN</a><br>
+      </div></div></article>
+    </body></html>
+  `;
+  const parsed = parseThread(html, "https://f95zone.to/threads/example.8/");
+  assert.deepEqual(parsed.downloadGroups.map((group) => group.label), ["All · Placeholder", "All · Public", "Win · Compressed"]);
+  assert.equal(parsed.downloadGroups[2].variant, "Compressed");
 });

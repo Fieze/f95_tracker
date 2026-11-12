@@ -103,12 +103,12 @@ module.exports = {
     this.db.run("DELETE FROM download_links WHERE game_id = ?", [game.id]);
 
     const linkStmt = this.db.prepare(`
-      INSERT INTO download_links (game_id, group_label, label, url, last_seen_at, branch, variant, platform, branch_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO download_links (game_id, group_label, label, url, last_seen_at, branch, variant, platform, branch_version, host)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     parsedThread.downloadGroups.forEach((group) => {
       group.links.forEach((link) => {
-        linkStmt.run([game.id, group.label, link.label, link.url, new Date().toISOString(), group.branch || null, group.variant || null, group.platform || null, group.branchVersion || null]);
+        linkStmt.run([game.id, group.label, link.label, link.url, new Date().toISOString(), group.branch || null, group.variant || null, group.platform || null, group.branchVersion || null, link.host || null]);
       });
     });
     linkStmt.free();
@@ -153,8 +153,38 @@ module.exports = {
     await this.persist();
   },
 
-  async markSyncSuccess(gameId, warnings = []) {
+  // Threads whose version was confirmed by the quick check count as synchronised, in one write for all of them.
+  async markGamesChecked(gameIds = []) {
+    if (!gameIds.length) return;
     const now = new Date().toISOString();
+    for (const gameId of gameIds) {
+      this.db.run("UPDATE games SET last_sync_at = ?, last_sync_status = 'success' WHERE id = ?", [now, gameId]);
+    }
+    await this.persist();
+  },
+
+  // Download links are signed per page load. When a thread did not change otherwise, only their addresses are
+  // renewed (matched by group and label, in order), so link ids and running downloads stay attached.
+  refreshDownloadLinkUrls(gameId, downloadGroups = []) {
+    const now = new Date().toISOString();
+    for (const group of downloadGroups) {
+      const stored = this.query(
+        "SELECT id, label FROM download_links WHERE game_id = ? AND group_label = ? ORDER BY id",
+        [gameId, group.label]
+      );
+      const used = new Set();
+      for (const link of group.links || []) {
+        const target = stored.find((row) => row.label === link.label && !used.has(row.id));
+        if (!target) continue;
+        used.add(target.id);
+        this.db.run("UPDATE download_links SET url = ?, host = ?, last_seen_at = ? WHERE id = ?", [link.url, link.host || null, now, target.id]);
+      }
+    }
+  },
+
+  async markSyncSuccess(gameId, warnings = [], downloadGroups = null) {
+    const now = new Date().toISOString();
+    if (downloadGroups?.length) this.refreshDownloadLinkUrls(gameId, downloadGroups);
     this.db.run(
       "UPDATE games SET last_sync_at = ?, last_sync_status = 'success', parser_warnings = ? WHERE id = ?",
       [now, JSON.stringify(warnings || []), gameId]
@@ -199,7 +229,7 @@ module.exports = {
     }
 
     const links = this.query(
-      "SELECT group_label, label, url, branch, variant, platform, branch_version FROM download_links WHERE game_id = ? ORDER BY group_label, label, url",
+      "SELECT group_label, label, url, host, branch, variant, platform, branch_version FROM download_links WHERE game_id = ? ORDER BY group_label, label, url",
       [gameId]
     );
     const downloadGroups = [];
@@ -211,7 +241,8 @@ module.exports = {
       }
       group.links.push({
         label: link.label || "",
-        url: link.url || ""
+        url: link.url || "",
+        host: link.host || ""
       });
     });
 
@@ -307,7 +338,9 @@ module.exports = {
       group.links.push({
         id: link.id,
         label: link.label,
-        url: link.url
+        url: link.url,
+        host: link.host || "",
+        lastSeenAt: link.last_seen_at || null
       });
     }
 

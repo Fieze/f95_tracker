@@ -3,7 +3,10 @@ const path = require("path");
 const { assertNoLinks, assertSafeTree, assertManagedInstallPath, isWithin } = require("./safeFiles");
 const { extractVersionFromFilename } = require("./matcher");
 const { branchLabelOfWholeName } = require("./releaseNames");
-const { buildBranchDirectory, buildGameRootCandidates, buildInstallDirectory, isExpectedGameInstallPath, rankLaunchExecutables, sanitizePathSegment, sanitizeVersion } = require("./utils");
+const { savesLiveOutsideGameFolder, transferSaves } = require("./saveTransfer");
+const { buildBranchDirectory, buildGameRootCandidates, buildInstallDirectory, compareVersions, isExpectedGameInstallPath, rankLaunchExecutables, sanitizePathSegment, sanitizeVersion } = require("./utils");
+// A version folder that is being removed after an update carries this suffix for the moment of its removal.
+const REMOVING_SUFFIX_PATTERN = /\.removing-[a-z0-9]+$/i;
 const pathKey = (value) => process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
 
 // Shared application state and facade calls are supplied by AppService.
@@ -232,6 +235,79 @@ class InstallationService {
     await this.app.syncGameFolders(folder.gameId, { game, skipFsDeleteCheck: true });
     this.app.emitChange();
     return this.app.db.getGameById(folder.gameId);
+  }
+
+  // Runs right after a new version was installed. Copies the saves from the version it replaces (the newest older
+  // version of the same chapter / season) into the new folder and then removes that older version.
+  // The old version is only removed when every save file arrived, and only when either saves were found or the
+  // engine is known to keep them outside the game folder. Returns null when there is nothing to carry over.
+  async carryOverFromPreviousVersion({ gameId, newFolderPath, branch = null, version = null, previousFolders = [] }) {
+    const settings = this.app.db.getSettings();
+    const game = this.app.db.getGameById(Number(gameId));
+    if (!settings.transferSaves || !game || !version) return null;
+
+    const previous = previousFolders
+      .filter((folder) => (folder.branch || null) === (branch || null) && pathKey(folder.folderPath) !== pathKey(newFolderPath))
+      .filter((folder) => folder.version && compareVersions(version, folder.version) > 0)
+      .sort((left, right) => compareVersions(right.version, left.version))[0];
+    if (!previous || !(await this.app.assetExists(previous.folderPath))) return null;
+
+    const outcome = { fromVersion: previous.version, fromFolder: previous.folderName, files: 0, removed: false, note: "" };
+    await assertNoLinks(previous.folderPath);
+    const transfer = await transferSaves(previous.folderPath, newFolderPath);
+    outcome.files = transfer.files;
+    await this.app.logger.info("Saves carried over to the new version.", {
+      gameId: game.id, from: previous.folderPath, to: newFolderPath, files: transfer.files, bytes: transfer.bytes, locations: transfer.locations
+    });
+
+    // The game keeps starting with the executable the player chose before.
+    if (previous.preferredExePath) {
+      const sameExecutable = path.join(newFolderPath, path.basename(previous.preferredExePath));
+      const newFolder = this.app.db.findGameFolderByPath(game.id, path.resolve(newFolderPath));
+      if (newFolder && (await this.app.assetExists(sameExecutable))) {
+        await this.app.db.updateGameFolderMetadata(newFolder.id, { preferredExePath: sameExecutable });
+      }
+    }
+
+    if (!settings.removeOldVersion) return outcome;
+    if (!transfer.files && !savesLiveOutsideGameFolder(game.engine)) {
+      outcome.note = `No save files were found in ${previous.folderName}, so it was kept. Remove it yourself once your saves are in place.`;
+      return outcome;
+    }
+    try {
+      await this.removeReplacedFolder(game, previous);
+      outcome.removed = true;
+    } catch (error) {
+      outcome.note = error.message;
+    }
+    return outcome;
+  }
+
+  // Removes a version folder that an update replaced. The folder is renamed first: Windows refuses that while the
+  // game is running or a file is open, which keeps a half-deleted installation from ever existing.
+  async removeReplacedFolder(game, folder) {
+    const installRoot = this.app.db.getSettings().installRoot;
+    try {
+      await assertManagedInstallPath(installRoot, buildGameRootCandidates(installRoot, game.title), folder.folderPath);
+    } catch {
+      throw new Error(`${folder.folderName} is outside the install folder and was kept.`);
+    }
+    const parked = `${folder.folderPath}.removing-${Date.now().toString(36)}`;
+    try {
+      await fs.rename(folder.folderPath, parked);
+    } catch {
+      throw new Error(`${folder.folderName} is still in use and was kept. Close the game and remove the old version yourself.`);
+    }
+    try {
+      await fs.rm(parked, { recursive: true, force: true });
+    } catch (error) {
+      await fs.rename(parked, folder.folderPath).catch(() => {});
+      throw new Error(`${folder.folderName} could not be removed completely: ${error.message}`);
+    }
+    const stored = this.app.db.findGameFolderByPath(game.id, path.resolve(folder.folderPath));
+    if (stored) await this.app.db.deleteGameFolder(stored.id);
+    await this.app.syncGameFolders(game.id, { game: this.app.db.getGameById(game.id) });
+    await this.app.logger.info("Removed the version replaced by an update.", { gameId: game.id, folderPath: folder.folderPath });
   }
 
   async refreshGameFolders(gameId) {
@@ -709,7 +785,7 @@ class InstallationService {
     await assertNoLinks(rootPath);
     const entries = await fs.readdir(rootPath, { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && entry.name !== ".f95-staging")
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && entry.name !== ".f95-staging" && !REMOVING_SUFFIX_PATTERN.test(entry.name))
       .map((entry) => ({
         folderName: entry.name,
         folderPath: path.join(rootPath, entry.name)

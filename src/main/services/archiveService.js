@@ -312,6 +312,7 @@ class ArchiveService {
       });
       await this.app.syncGameFolders(gameId, { game, rootOverride: installDirectory });
       registered = true;
+      await this.carryOverAfterInstall({ game, finalDirectory, branch: job.branch || null, version: detectedVersion || game.currentVersion || null });
       const finishedAt = Date.now();
       const startedAtMs = new Date(startedAt).getTime();
       await this.app.db.updateArchiveJob(job.id, {
@@ -364,6 +365,27 @@ class ArchiveService {
       this.app.activeExtractionHandle = null;
       this.app.currentExtraction = null;
       this.app.emitChange();
+    }
+  }
+
+  // Saves follow the player to the new version, and the version they came from is removed once they arrived.
+  // This never fails the installation: a problem is shown in the status line and the old version stays.
+  async carryOverAfterInstall({ game, finalDirectory, branch, version }) {
+    try {
+      const outcome = await this.app.carryOverFromPreviousVersion({
+        gameId: game.id, newFolderPath: finalDirectory, branch, version, previousFolders: game.folders || []
+      });
+      if (!outcome) return;
+      const moved = outcome.files
+        ? `${outcome.files} save file${outcome.files === 1 ? "" : "s"} carried over from ${outcome.fromVersion}`
+        : `no save files to carry over from ${outcome.fromVersion}`;
+      const activityId = this.app.startActivity("update", `Updating ${game.title}`);
+      if (outcome.note) this.app.finishActivity(activityId, { error: `${game.title}: ${moved}. ${outcome.note}` });
+      else this.app.finishActivity(activityId, { message: `${game.title}: ${moved}${outcome.removed ? ", old version removed" : ""}` });
+    } catch (error) {
+      await this.app.extractionLogger.warn("Saves could not be carried over; the previous version was kept.", { gameId: game.id, message: error.message });
+      const activityId = this.app.startActivity("update", `Updating ${game.title}`);
+      this.app.finishActivity(activityId, { error: `${game.title}: saves could not be carried over (${error.message}). The previous version was kept.` });
     }
   }
 

@@ -6,9 +6,30 @@ const { compareVersions, sanitizeVersion } = require("./utils");
 const SPECIAL_WORDS = "christmas|xmas|halloween|summer|winter|spring|autumn|valentine(?:'?s)?|easter|new[ -]?year'?s?|anniversary|holiday|birthday|bonus";
 const SPECIAL_PATTERN = new RegExp(`\\b(${SPECIAL_WORDS})[ _.-]+(?:special|episode|story|edition|event)\\b`, "i");
 const PLAIN_SPECIAL_PATTERN = /\bspecial\b(?!\s+thanks)/i;
-const CHAPTER_RANGE_PATTERN = /\b(?:chapters?|chap|ch)\.?\s*0*(\d{1,2})\s*(?:-|–|to)\s*0*(\d{1,2})\b/i;
-const CHAPTER_PATTERN = /\b(?:chapter|chap|ch)\.?\s*0*(\d{1,2})\b/i;
-const SEASON_PATTERN = /\b(?:season|s)\.?\s*0*(\d{1,2})\b(?![.\d])/i;
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const ROMAN_NUMERALS = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
+const NUMBER = "(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|[ivx]{1,4})";
+const RANGE_JOIN = "\\s*(?:-|–|—|&|\\+|\\bto\\b|\\band\\b)\\s*";
+
+// The kinds of branch a release can be split into. "core" kinds are also read from loose text (changelog lines, the
+// game's name); the others only from places that are written as a release label (title bracket, download headings,
+// archive and folder names), because "act 2" or "part 3" are too common in ordinary sentences.
+const BRANCH_KINDS = [
+  { type: "season", label: "Season", words: "seasons?", core: true, shorthand: true },
+  { type: "chapter", label: "Chapter", words: "chapters?|chap|ch", core: true },
+  { type: "book", label: "Book", words: "books?" },
+  { type: "volume", label: "Volume", words: "volumes?|vol" },
+  { type: "act", label: "Act", words: "acts?" },
+  { type: "part", label: "Part", words: "parts?|pt", notSplit: true }
+].map((kind) => {
+  const lead = (kind.notSplit ? "(?<!\\.)" : "") + "\\b(?:" + kind.words + ")\\.?\\s*";
+  const single = lead + "0*" + NUMBER + "(?![a-z0-9])" + (kind.notSplit ? "(?!\\s*(?:of|\\/)\\s*\\d)" : "");
+  const range = lead + "0*" + NUMBER + RANGE_JOIN + "(?:(?:" + kind.words + ")\\.?\\s*)?0*" + NUMBER + "(?![a-z0-9])(?!\\.\\d)";
+  return { ...kind, single: new RegExp(single, "gi"), range: new RegExp(range, "gi") };
+});
+// "S2", "S02E05", "S1+S2": only digits, directly after the letter, and never a version such as "s2.5".
+const SEASON_SHORT_PATTERN = /(?<!['’\w])s0*(\d{1,2})(?!\.?\d)(?=$|[^a-z0-9]|e(?:p|\d))/gi;
+const SEASON_SHORT_RANGE_PATTERN = /(?<!['’\w])s0*(\d{1,2})(?:\s*(?:&|\+)\s*s?|\s*(?:-|–)\s*s)0*(\d{1,2})(?![a-z0-9])(?!\.\d)/gi;
 
 function capitalize(value) {
   return String(value || "").replace(/(^|[\s'-])([a-z])/g, (_, lead, letter) => lead + letter.toUpperCase());
@@ -22,44 +43,88 @@ function normalizeSpecialName(word) {
   return capitalize(lower);
 }
 
-// First branch mentioned in the text, or null. `range` is set for "Ch. 1-4" (the thread covers several chapters).
-function parseBranch(text) {
+// Digits, number words ("Two") and upper-case roman numerals ("IV"); lower-case "v" or "i" is ordinary text.
+function toNumber(token) {
+  const raw = String(token || "");
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return NUMBER_WORDS[raw.toLowerCase()] || ROMAN_NUMERALS[raw] || null;
+}
+
+function firstValidMatch(value, pattern, build) {
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
+    const result = build(match);
+    if (result) return result;
+  }
+  return null;
+}
+
+function findBranchOfKind(value, kind) {
+  const asRange = (match) => {
+    const from = toNumber(match[1]);
+    const to = toNumber(match[2]);
+    if (!from || !to || to <= from || to - from >= 30) return null;
+    return { type: kind.type, label: kind.label + " " + to, number: to, range: [from, to], index: match.index, raw: match[0] };
+  };
+  const asSingle = (match) => {
+    const number = toNumber(match[1]);
+    if (number === null) return null;
+    return { type: kind.type, label: kind.label + " " + number, number, index: match.index, raw: match[0] };
+  };
+  return firstValidMatch(value, kind.range, asRange) ||
+    (kind.shorthand && firstValidMatch(value, SEASON_SHORT_RANGE_PATTERN, asRange)) ||
+    firstValidMatch(value, kind.single, asSingle) ||
+    (kind.shorthand && firstValidMatch(value, SEASON_SHORT_PATTERN, asSingle)) ||
+    null;
+}
+
+// First branch mentioned in the text, or null. A season wins over a chapter ("S2 Ch.10" is season 2).
+// "range" is set for "Ch. 1-4" or "Season 1 & 2" (the release covers several of them); the label names the last one.
+// With extended: false only seasons, chapters and specials are recognised (see BRANCH_KINDS).
+function parseBranch(text, { extended = true } = {}) {
   const value = String(text || "");
   let match = value.match(SPECIAL_PATTERN);
-  if (match) return { type: "special", label: `${normalizeSpecialName(match[1])} Special`, number: null, index: match.index, raw: match[0] };
-  match = value.match(CHAPTER_RANGE_PATTERN);
-  if (match && Number(match[2]) > Number(match[1]) && Number(match[2]) - Number(match[1]) < 30) {
-    return { type: "chapter", label: `Chapter ${Number(match[2])}`, number: Number(match[2]), range: [Number(match[1]), Number(match[2])], index: match.index, raw: match[0] };
+  if (match) return { type: "special", label: normalizeSpecialName(match[1]) + " Special", number: null, index: match.index, raw: match[0] };
+  for (const kind of BRANCH_KINDS) {
+    if (!extended && !kind.core) continue;
+    const found = findBranchOfKind(value, kind);
+    if (found) return found;
   }
-  match = value.match(CHAPTER_PATTERN);
-  if (match) return { type: "chapter", label: `Chapter ${Number(match[1])}`, number: Number(match[1]), index: match.index, raw: match[0] };
-  match = value.match(SEASON_PATTERN);
-  if (match) return { type: "season", label: `Season ${Number(match[1])}`, number: Number(match[1]), index: match.index, raw: match[0] };
   match = value.match(PLAIN_SPECIAL_PATTERN);
   if (match) return { type: "special", label: "Special", number: null, index: match.index, raw: match[0] };
   return null;
 }
 
-// Every branch label the text implies: a chapter range expands to all of its chapters.
-function expandBranches(text) {
-  const branch = parseBranch(text);
+function kindLabel(type) {
+  return BRANCH_KINDS.find((kind) => kind.type === type)?.label || "";
+}
+
+// "Season 1-2" for a range, the plain label otherwise. Used where several branches ship as one download.
+function branchDisplayLabel(branch) {
+  if (!branch) return null;
+  return branch.range ? kindLabel(branch.type) + " " + branch.range[0] + "-" + branch.range[1] : branch.label;
+}
+
+// Every branch label the text implies: a range expands to all of its members.
+function expandBranches(text, options) {
+  const branch = parseBranch(text, options);
   if (!branch) return [];
   if (branch.range) {
     const labels = [];
-    for (let number = branch.range[0]; number <= branch.range[1]; number += 1) labels.push(`Chapter ${number}`);
+    for (let number = branch.range[0]; number <= branch.range[1]; number += 1) labels.push(kindLabel(branch.type) + " " + number);
     return labels;
   }
   return [branch.label];
 }
 
-// The label when the whole text is nothing but a branch ("Chapter 2", "S4", "Christmas Special"), else null.
-// Used to tell branch sub-folders from version folders.
+// The label when the whole text is nothing but a branch ("Chapter 2", "S4", "Season 1-2", "Christmas Special"),
+// else null. Used to tell branch sub-folders from version folders.
 function branchLabelOfWholeName(name) {
   const text = String(name || "").trim();
   const branch = parseBranch(text);
-  if (!branch || branch.range) return null;
+  if (!branch) return null;
   const rest = text.replace(branch.raw, " ").replace(/[\s._\-()[\]]+/g, "");
-  return rest ? null : branch.label;
+  return rest ? null : branchDisplayLabel(branch);
 }
 
 // Variant keywords found in a release name or a download label.
@@ -106,7 +171,7 @@ function extractChangelogVersions(text) {
     if (!match) continue;
     const version = sanitizeVersion(match[1]);
     if (!version) continue;
-    const branch = parseBranch(line)?.label || null;
+    const branch = parseBranch(line, { extended: false })?.label || null;
     const key = `${branch || ""}|${version.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -155,10 +220,12 @@ function parseReleaseName(name) {
   };
 }
 
+const BRANCH_SORT_ORDER = ["Chapter", "Season", "Book", "Volume", "Act", "Part"];
+
 function branchSortKey(label) {
-  const match = /^(Chapter|Season) (d+)$/.exec(label);
-  if (match) return [match[1] === "Chapter" ? 0 : 1, Number(match[2]), label];
-  return [2, 0, label];
+  const match = /^(Chapter|Season|Book|Volume|Act|Part) (\d+)(?:-\d+)?$/.exec(label);
+  if (match) return [BRANCH_SORT_ORDER.indexOf(match[1]), Number(match[2]), label];
+  return [BRANCH_SORT_ORDER.length, 0, label];
 }
 
 function compareBranches(left, right) {
@@ -228,6 +295,7 @@ function buildBranchInfo({ titleBranches = [], currentVersion = null, changelog 
 }
 
 module.exports = {
+  branchDisplayLabel,
   buildBranchInfo,
   compareBranches,
   branchLabelOfWholeName,

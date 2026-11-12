@@ -94,7 +94,10 @@ class DatabaseService {
       installRoot: settings.install_root || "",
       syncIntervalMinutes: Number(settings.sync_interval_minutes || 30),
       keepArchives: settings.keep_archives === "1",
-      extraDownloadHosts: settings.extra_download_hosts || ""
+      extraDownloadHosts: settings.extra_download_hosts || "",
+      // Both are on unless switched off: saves move to the new version, then the version they came from is removed.
+      transferSaves: settings.transfer_saves !== "0",
+      removeOldVersion: settings.remove_old_version !== "0"
     };
   }
 
@@ -106,7 +109,9 @@ class DatabaseService {
       install_root: settings.installRoot || "",
       sync_interval_minutes: String(settings.syncIntervalMinutes || 30),
       keep_archives: settings.keepArchives ? "1" : "0",
-      extra_download_hosts: String(settings.extraDownloadHosts || "")
+      extra_download_hosts: String(settings.extraDownloadHosts || ""),
+      transfer_saves: settings.transferSaves ? "1" : "0",
+      remove_old_version: settings.removeOldVersion ? "1" : "0"
     };
 
     const stmt = this.db.prepare(

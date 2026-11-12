@@ -22,6 +22,28 @@ const ASSET_DOWNLOAD_CONCURRENCY = 4;
 const FINISHED_ACTIVITY_VISIBLE_MS = 4000;
 const SPLIT_ARCHIVE_MESSAGE = "Split archives (multi-part downloads) are not supported by this app. Join and extract them yourself.";
 const ARCHIVE_PATTERN = /\.(zip|rar|7z)$/i;
+const FORUM_DOWNLOAD_LINK_PATTERN = /^https?:\/\/f95zone\.to\/dl\//i;
+// Signed forum links were still accepted eleven minutes after the page load that produced them; older ones are renewed.
+const DOWNLOAD_LINK_MAX_AGE_MS = 10 * 60 * 1000;
+
+// The forum's version check answers for many threads in one request; this many ids go into each one.
+const VERSION_CHECK_URL = "https://f95zone.to/sam/checker.php";
+const VERSION_CHECK_BATCH = 100;
+// A thread whose version did not change is still read in full once in a while (rating, tags, changelog wording).
+const FULL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// The signature of a forum download link changes with every page load and says nothing about the thread itself.
+function stableLinkUrl(url) {
+  return FORUM_DOWNLOAD_LINK_PATTERN.test(String(url || "")) ? String(url).split("?")[0] : String(url || "");
+}
+
+// Download groups in a form that compares equal for two loads of an unchanged thread, whatever their order.
+function comparableDownloadGroups(groups) {
+  return JSON.stringify((groups || []).map((group) => [
+    group.label || "", group.branch || "", group.variant || "", group.platform || "", group.branchVersion || "",
+    (group.links || []).map((link) => (link.label || "") + "|" + stableLinkUrl(link.url)).sort()
+  ]).sort((left, right) => left[0].localeCompare(right[0])));
+}
 
 class AppService {
   constructor({ userDataPath, authSession, onStateChanged, onGameUpdateAvailable, logger, loggers = {}, folderWatcher, downloadFetch, launchProcess, fetcherOptions }) {
@@ -76,6 +98,8 @@ class AppService {
     this.nextActivityId = 1;
     this.activityTimers = new Map();
     this.pendingThreadUrls = new Set();
+    // When each game's thread was last read in full during this run of the app.
+    this.lastFullRefreshAt = new Map();
     this.pendingFolderPaths = new Set();
     // Archives the user dropped in from elsewhere: kept after extraction instead of being deleted/moved.
     this.keepSourceArchives = new Set();
@@ -148,6 +172,8 @@ class AppService {
       installRoot: payload.installRoot,
       syncIntervalMinutes: payload.syncIntervalMinutes,
       keepArchives: payload.keepArchives === undefined ? undefined : Boolean(payload.keepArchives),
+      transferSaves: payload.transferSaves === undefined ? undefined : Boolean(payload.transferSaves),
+      removeOldVersion: payload.removeOldVersion === undefined ? undefined : Boolean(payload.removeOldVersion),
       extraDownloadHosts: payload.extraDownloadHosts === undefined ? undefined : String(payload.extraDownloadHosts)
     });
     await this.applyRuntimeSettings(settings);
@@ -460,6 +486,7 @@ class AppService {
     });
     const enriched = await this.hydrateThreadAssets(parsed);
     const game = await this.db.upsertGameFromThread(enriched);
+    this.lastFullRefreshAt.set(game.id, Date.now());
     await this.syncGameFolders(game.id, { game: this.db.getGameById(game.id) });
     this.emitChange();
     await this.logger.info("Thread added.", { gameId: game.id, title: game.title });
@@ -483,8 +510,9 @@ class AppService {
         title: game.title
       });
       this.preserveMembersOnlyData(parsed, refreshMetadata, game);
+      this.lastFullRefreshAt.set(game.id, Date.now());
       if (!this.hasThreadChanges(refreshMetadata, parsed)) {
-        await this.db.markSyncSuccess(game.id, parsed.warnings || []);
+        await this.db.markSyncSuccess(game.id, parsed.warnings || [], parsed.parserDebug?.guestView ? null : parsed.downloadGroups);
         await this.logger.info("Game refresh detected no thread changes.", {
           gameId: game.id,
           title: game.title
@@ -571,13 +599,55 @@ class AppService {
     });
   }
 
+  // Asks the forum's version check for the current version of every tracked thread: one request per hundred threads
+  // instead of one page load each. Returns a Map of thread id to version; throws when the answer is not usable.
+  async fetchThreadVersions(games) {
+    const ids = [...new Set(games.map((game) => String(game.threadId || "")).filter((id) => /^\d+$/.test(id)))];
+    const versions = new Map();
+    for (let start = 0; start < ids.length; start += VERSION_CHECK_BATCH) {
+      const page = await this.fetcher.fetchUrl(`${VERSION_CHECK_URL}?threads=${ids.slice(start, start + VERSION_CHECK_BATCH).join(",")}`, { interactive: false });
+      // Read through a browser window the JSON arrives wrapped in a page.
+      const text = String(page.html || "").replace(/<[^>]*>/g, "").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").trim();
+      const body = JSON.parse(text);
+      if (body?.status !== "ok" || !body.msg || typeof body.msg !== "object") throw new Error("The version check gave an unexpected answer.");
+      for (const [id, version] of Object.entries(body.msg)) versions.set(String(id), sanitizeVersion(version) || "");
+    }
+    return versions;
+  }
+
+  // True when the quick check confirms the stored version and the thread was read in full not long ago.
+  // A thread that was last read without a login is always read again: its download links are still missing.
+  isConfirmedUpToDate(game, versions) {
+    const id = String(game.threadId || "");
+    const lastFull = this.lastFullRefreshAt.get(game.id) || 0;
+    const readAsGuest = (game.parserWarnings || []).some((warning) => /logged in|login page|restricted view/i.test(warning));
+    return versions.has(id) && versions.get(id) === (game.currentVersion || "") &&
+      Date.now() - lastFull < FULL_REFRESH_INTERVAL_MS && !readAsGuest;
+  }
+
   async refreshAllGames() {
     await this.logger.info("Refreshing all games.");
     const games = this.db.getGames();
     const activityId = games.length ? this.startActivity("refresh-all", "Refreshing games", { total: games.length }) : null;
     let failed = 0;
     let stoppedByCheck = false;
+    let versions = null;
+    // Only worth a request when at least one thread could be skipped because it was read in full recently.
+    if (games.some((game) => this.lastFullRefreshAt.has(game.id))) {
+      try {
+        versions = await this.fetchThreadVersions(games);
+      } catch (error) {
+        stoppedByCheck = Boolean(error.challenge);
+        await this.logger.warn("Quick version check failed; reading every thread instead.", { message: error.message });
+      }
+    }
+    const confirmed = [];
     for (const [index, game] of games.entries()) {
+      if (stoppedByCheck) break;
+      if (versions && this.isConfirmedUpToDate(game, versions)) {
+        confirmed.push(game.id);
+        continue;
+      }
       this.updateActivity(activityId, { label: `Refreshing ${game.title}`, progress: { done: index, total: games.length } });
       try {
         await this.refreshGame(game.id, { background: true });
@@ -597,7 +667,9 @@ class AppService {
         // Keep background refresh resilient per game.
       }
     }
-    await this.logger.info("Finished refreshing all games.", { count: games.length });
+    await this.db.markGamesChecked(confirmed);
+    if (confirmed.length) this.emitChange();
+    await this.logger.info("Finished refreshing all games.", { count: games.length, confirmedByVersionCheck: confirmed.length });
     if (activityId) {
       if (stoppedByCheck) {
         this.finishActivity(activityId, { error: "Refresh stopped: F95Zone wants a browser check. Open Login to complete it." });
@@ -666,8 +738,8 @@ class AppService {
 
     const existingWarnings = JSON.stringify(existingThread.parserWarnings || []);
     const parsedWarnings = JSON.stringify(parsedThread.warnings || []);
-    const existingDownloads = JSON.stringify(existingThread.downloadGroups || []);
-    const parsedDownloads = JSON.stringify(parsedThread.downloadGroups || []);
+    const existingDownloads = comparableDownloadGroups(existingThread.downloadGroups);
+    const parsedDownloads = comparableDownloadGroups(parsedThread.downloadGroups);
 
     return (
       String(existingThread.sourceUrl || "") !== String(parsedThread.sourceUrl || "") ||
@@ -676,6 +748,36 @@ class AppService {
       existingWarnings !== parsedWarnings ||
       existingDownloads !== parsedDownloads
     );
+  }
+
+  // A download is about to start: returns the payload with a link that is fresh enough for the forum to accept.
+  // Forum links (f95zone.to/dl/...) are signed when the thread page is loaded, so an old one is replaced by the same
+  // link (same group, same label) from a new load. Anything that goes wrong here leaves the stored link in place.
+  async freshDownloadPayload(payload = {}) {
+    const findLink = () => this.db.getGameById(Number(payload.gameId))?.downloadGroups
+      .flatMap((group) => group.links)
+      .find((link) => Number(link.id) === Number(payload.linkId)) || null;
+    const withLink = (link) => link ? { ...payload, url: link.url, host: link.host || payload.host || "" } : payload;
+
+    if (!payload.gameId || payload.linkId == null) return payload;
+    const stored = findLink();
+    if (!stored || !FORUM_DOWNLOAD_LINK_PATTERN.test(stored.url)) return withLink(stored);
+    const age = Date.now() - Date.parse(stored.lastSeenAt || "");
+    if (Number.isFinite(age) && age < DOWNLOAD_LINK_MAX_AGE_MS) return withLink(stored);
+
+    try {
+      const game = this.db.getGameById(Number(payload.gameId));
+      const parsed = await this.loadThread(game.threadUrl, { action: "renew_download_links", gameId: game.id, title: game.title });
+      if (parsed.downloadGroups?.length) {
+        this.db.refreshDownloadLinkUrls(game.id, parsed.downloadGroups);
+        await this.db.persist();
+      }
+    } catch (error) {
+      await this.downloadLogger.warn("Download link could not be renewed; using the stored one.", {
+        gameId: Number(payload.gameId), message: error.message
+      });
+    }
+    return withLink(findLink());
   }
 
   async resolveThreadAsset(assetUrl, prefix, existingAsset = null) {
@@ -987,6 +1089,7 @@ const delegatedMethods = {
     "addExistingFolder",
     "syncAllManagedFolders",
     "syncGameFolders",
+    "carryOverFromPreviousVersion",
     "ensureGameRootForGame",
     "ensureAllGameRoots",
     "listDirectSubdirectories",

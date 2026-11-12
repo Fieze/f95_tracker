@@ -1,6 +1,6 @@
 const cheerio = require("cheerio");
 const { sanitizeVersion } = require("./utils");
-const { expandBranches, parseBranch, parsePlatform, parseVariant } = require("./releaseNames");
+const { branchDisplayLabel, expandBranches, parseBranch, parsePlatform, parseVariant } = require("./releaseNames");
 
 const VERSION_PATTERNS = [
   /\[([^\]]*?(?:v(?:ersion)?\.?\s*[0-9][^\]]*))\]/i,
@@ -327,8 +327,43 @@ function normalizeDownloadLabel(label) {
 
 // "win" / "pc" / "linux" at the start of a row, spelled the way the thread does for the combined labels.
 function parsePlatformLabel(text) {
-  const raw = String(text || "");
-  return /^(win\/linux\/mac|win\/linux|windows|win)$/i.test(raw) ? raw : parsePlatform(raw) || raw;
+  const raw = String(text || "").replace(/\s*([/&,+])\s*/g, "$1");
+  if (/^all$/i.test(raw)) return "All";
+  if (/[/&,+]/.test(raw)) return raw;
+  return /^(windows|win)$/i.test(raw) ? raw : parsePlatform(raw) || raw;
+}
+
+// A build that runs on Windows: a Windows / PC row, or an "All" row (HTML games, one archive for every system).
+function isWindowsCapable(platform) {
+  return /\b(?:win(?:dows)?|pc|all)\b/i.test(String(platform || ""));
+}
+
+// F95Zone plants hidden decoy links between the real ones ("u-hidden"); nothing inside a hidden node is content.
+function isHiddenNode(node) {
+  const attribs = node?.attribs || {};
+  return /(?:^|\s)u-hidden(?:\s|$)/.test(attribs.class || "") ||
+    Object.prototype.hasOwnProperty.call(attribs, "hidden") ||
+    /display\s*:\s*none/i.test(attribs.style || "");
+}
+
+// The file host behind a link. Download links all point to f95zone.to/dl/..., so the host is read from the favicon
+// the forum puts on the link, then from an old-style masked link, then from the address itself.
+function linkHost(node, href) {
+  const favicon = String(node?.attribs?.style || "").match(/\/ip3\/([a-z0-9.-]+)\.ico/i);
+  if (favicon) return favicon[1].toLowerCase();
+  try {
+    const parsed = new URL(href);
+    const masked = parsed.pathname.match(/^\/masked\/([^/]+)/i);
+    if (/(^|\.)f95zone\.to$/i.test(parsed.hostname)) return masked ? masked[1].toLowerCase() : "";
+    return parsed.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+// The signed part of a download link changes with every page load; without it two loads of a thread compare equal.
+function stripLinkTokens(value) {
+  return String(value || "").replace(/(https?:\/\/f95zone\.to\/dl\/\d+\/)\?[^"'\s<>]*/gi, "$1");
 }
 
 function isDownloadsHeaderLine(text) {
@@ -339,21 +374,43 @@ function isDownloadRow(text) {
   return /^(win\/linux\/mac|win\/linux|windows|win|mac|android)(?:\s*\([^)]*\))?\s*:/i.test(String(text || "").trim());
 }
 
-// Download rows may carry a variant between the platform and the colon: "Win/Linux (HQ):", "Win/Linux - Split:".
-const LOOSE_ROW_PATTERN = /^(win\/linux\/mac|win\/linux|windows|win|mac|android|linux|pc)(?![a-z])([^:]{0,40}):/i;
+// Download rows start with one or more platforms and may carry a variant before the colon:
+// "Win/Linux (HQ):", "Win/Linux - Split:", "Win (Compatibility):", "All (Public):".
+const PLATFORM_WORD = "win(?:dows)?|pc|linux|mac(?:os)?|android|ios";
+const LOOSE_ROW_PATTERN = new RegExp(
+  `^((?:${PLATFORM_WORD}|all)(?:\\s*[/&,+]\\s*(?:${PLATFORM_WORD}))*)(?![a-z])([^:]{0,40}):`, "i"
+);
 
 function isLooseDownloadRow(text) {
   return LOOSE_ROW_PATTERN.test(String(text || "").trim());
 }
 
-// A line without links that names a chapter / season / special ahead of its download rows: "Chapter 2 v0.5".
-function parseBranchHeading(line) {
-  const text = String(line.text || "").trim();
-  if (!text || line.links.length > 0 || text.length > 90 || isLooseDownloadRow(text) || isDownloadsHeaderLine(text)) return null;
-  const branch = parseBranch(text);
-  if (!branch || branch.range) return null;
-  const version = text.match(/\bv(?:ersion)?\.?\s*(\d[0-9a-z._-]*)/i)?.[1];
-  return { label: branch.label, version: sanitizeVersion(version) || null };
+function cleanLabelText(text) {
+  return normalizeWhitespace(String(text || "").replace(/^[\s\-–—:,+&([]+|[\s\-–—:,+&)\]]+$/g, ""));
+}
+
+// The variant a piece of text names: a known keyword (HQ, Compressed, Split ...) or the text itself ("Sandbox").
+function variantFromText(text) {
+  const known = parseVariant(text).variant;
+  if (known) return known;
+  if (/\bpart\s*\d/i.test(text)) return "Split";
+  const cleaned = cleanLabelText(text);
+  // "(v0.17.2.1)" names the build's version, not a variant.
+  if (/^(?:v(?:ersion)?\.?\s*)?\d+(?:\.\d+)*[a-z]?(?:\s+\w+)?$/i.test(cleaned)) return "";
+  return cleaned.length <= 30 ? cleaned : "";
+}
+
+// A short line without links inside the download section that describes the rows after it: a chapter / season
+// ("Season 1", "Chapter 2 v0.5", "Season 1&2 + DLCs") and / or a variant ("Compressed", "Sandbox", "VN-S1").
+function parseSectionHeading(text) {
+  const value = normalizeWhitespace(text);
+  if (!value || value.length > 60 || value.startsWith("*") || /[.!?]$/.test(value) || value.split(" ").length > 6) return null;
+  if (isLooseDownloadRow(value) || isDownloadsHeaderLine(value)) return null;
+  const branch = parseBranch(value);
+  if (!branch) return { branch: null, version: null, variant: variantFromText(value) };
+  const version = value.match(/\bv(?:ersion)?\.?\s*(\d[0-9a-z._-]*)/i);
+  const rest = value.replace(branch.raw, " ").replace(version?.[0] || "", " ");
+  return { branch: branchDisplayLabel(branch), version: sanitizeVersion(version?.[1]) || null, variant: variantFromText(rest) };
 }
 
 function isBlockBoundary(tagName) {
@@ -367,7 +424,9 @@ function createEmptyLine() {
   };
 }
 
-function buildLogicalLines($, root) {
+// With markSpoilers the content of spoiler blocks stays in the result, wrapped in { spoilerOpen, title } and
+// { spoilerClose } entries; the download section keeps older seasons and extra builds in spoilers.
+function buildLogicalLines($, root, { markSpoilers = false } = {}) {
   const lines = [];
   let current = createEmptyLine();
 
@@ -398,8 +457,27 @@ function buildLogicalLines($, root) {
 
     const tagName = String(node.name || "").toLowerCase();
 
+    if (isHiddenNode(node)) {
+      return;
+    }
+
     if (tagName === "br") {
       pushCurrent();
+      return;
+    }
+
+    if (markSpoilers && /(?:^|\s)bbCodeSpoiler(?:\s|$)/.test(node.attribs?.class || "")) {
+      pushCurrent();
+      const title = normalizeWhitespace($(node).find(".bbCodeSpoiler-button").first().text()).replace(/^spoiler\s*:?\s*/i, "");
+      let content = $(node).find(".bbCodeBlock-content").first();
+      if (!content.length) content = $(node).find(".bbCodeSpoiler-content").first();
+      const children = content.length
+        ? content.contents().toArray()
+        : $(node).contents().toArray().filter((child) => !/bbCodeSpoiler-button/.test(child.attribs?.class || ""));
+      lines.push({ text: "", links: [], spoilerOpen: true, title });
+      children.forEach((child) => walk(child));
+      pushCurrent();
+      lines.push({ text: "", links: [], spoilerClose: true });
       return;
     }
 
@@ -409,7 +487,8 @@ function buildLogicalLines($, root) {
       if (href && /^https?:/i.test(href)) {
         current.links.push({
           label: label || new URL(href).hostname,
-          url: href
+          url: href,
+          host: linkHost(node, href)
         });
       }
       current.text += label;
@@ -502,84 +581,90 @@ function extractFieldText(lines, fieldName) {
   return text;
 }
 
-function extractDownloadSectionLines(lines) {
-  const headerIndex = lines.findIndex((line) => isDownloadsHeaderLine(line.text));
+// Everything after the "DOWNLOAD" heading. Threads without that heading fall back to all lines outside spoilers.
+function extractDownloadSectionLines(lines, markedLines = lines) {
+  const headerIndex = markedLines.findIndex((line) => !line.spoilerOpen && !line.spoilerClose && isDownloadsHeaderLine(line.text));
   if (headerIndex === -1) {
-    return {
-      lines,
-      downloadsHeaderFound: false
-    };
+    return { lines, downloadsHeaderFound: false };
   }
-
+  // A heading inside a spoiler belongs to that spoiler only; the section ends where the spoiler does.
   const sectionLines = [];
-  let inDownloadBlock = false;
-
-  for (let index = headerIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (isDownloadsHeaderLine(line.text)) {
-      continue;
+  let depth = 0;
+  for (const line of markedLines.slice(headerIndex + 1)) {
+    if (line.spoilerOpen) depth += 1;
+    if (line.spoilerClose) {
+      depth -= 1;
+      if (depth < 0) break;
     }
-
-    // Chapter / season headings sit between the rows of a multi-branch thread and do not end the block.
-    if (parseBranchHeading(line)) {
-      sectionLines.push(line);
-      continue;
-    }
-
-    if (!inDownloadBlock) {
-      if (isLooseDownloadRow(line.text)) {
-        inDownloadBlock = true;
-        sectionLines.push(line);
-      }
-      continue;
-    }
-
-    if (!isLooseDownloadRow(line.text)) {
-      break;
-    }
-
+    // A second "DOWNLOADS" heading starts something else (old builds, another edition); it is not merged in.
+    if (depth === 0 && !line.spoilerOpen && !line.spoilerClose && isDownloadsHeaderLine(line.text)) break;
     sectionLines.push(line);
   }
-
-  return {
-    lines: sectionLines.length > 0 ? sectionLines : lines,
-    downloadsHeaderFound: true
-  };
+  const hasRows = sectionLines.some((line) => line.links?.length && isLooseDownloadRow(line.text));
+  return { lines: hasRows ? sectionLines : lines, downloadsHeaderFound: true };
 }
 
+// Reads the download rows. Short lines without links act as headings for the rows after them ("Season 1",
+// "Compressed"), and so does the title of a spoiler; a heading placed right before a spoiler applies to its content.
+// Rows inside a spoiler that nothing describes are grouped as "More".
 function collectDownloadGroupsFromLines(lines) {
   const seen = new Set();
   const groups = new Map();
-  let heading = null;
+  const emptyContext = () => ({ branch: null, version: null, variant: "" });
+  // `base` is what the current nesting level starts from; `context` adds the headings seen on that level.
+  let base = emptyContext();
+  let context = base;
+  const stack = [];
+
+  const applyHeading = (heading) => {
+    if (heading.branch) context = { branch: heading.branch, version: heading.version, variant: heading.variant };
+    else context = { ...context, variant: heading.variant };
+  };
 
   lines.forEach((line) => {
-    const headingBranch = parseBranchHeading(line);
-    if (headingBranch) {
-      heading = headingBranch;
+    if (line.spoilerOpen) {
+      const titled = line.title ? parseSectionHeading(line.title) : null;
+      if (titled) applyHeading(titled);
+      else if (!context.branch && !context.variant) context = { ...context, variant: "More" };
+      stack.push(base);
+      base = context;
+      return;
+    }
+    if (line.spoilerClose) {
+      // The heading in front of a spoiler is used up once the spoiler ends.
+      base = stack.pop() || emptyContext();
+      context = base;
       return;
     }
 
-    const rowMatch = String(line.text || "").trim().match(LOOSE_ROW_PATTERN);
-    if (!rowMatch || line.links.length === 0) {
+    const text = String(line.text || "").trim();
+    const rowMatch = text.match(LOOSE_ROW_PATTERN);
+    if (!rowMatch) {
+      const heading = line.links.length === 0 ? parseSectionHeading(text) : null;
+      if (heading) applyHeading(heading);
+      return;
+    }
+    if (line.links.length === 0) {
       return;
     }
 
     const platform = normalizeDownloadLabel(parsePlatformLabel(rowMatch[1]));
     // Only Windows-capable builds are listed; Mac, Android and Linux-only rows are ignored.
-    if (!/^win/i.test(platform)) {
+    if (!isWindowsCapable(platform)) {
       return;
     }
-    const variantInfo = parseVariant(rowMatch[2]);
     const rowBranch = parseBranch(rowMatch[2]);
-    const branch = rowBranch?.label || heading?.label || null;
-    const label = [branch, platform, variantInfo.variant].filter(Boolean).join(" · ");
+    const rowVariant = variantFromText(rowBranch ? rowMatch[2].replace(rowBranch.raw, " ") : rowMatch[2]);
+    const branch = (rowBranch ? branchDisplayLabel(rowBranch) : null) || context.branch || null;
+    const variant = rowVariant || context.variant || "";
+    const label = [branch, platform, variant].filter(Boolean).join(" · ");
     if (!groups.has(label)) {
       groups.set(label, {
         label,
         branch,
         platform,
-        variant: variantInfo.variant,
-        branchVersion: !rowBranch && heading?.label === branch ? heading.version : null,
+        variant,
+        branchVersion: !rowBranch && context.branch === branch ? context.version : null,
         links: []
       });
     }
@@ -599,7 +684,7 @@ function collectDownloadGroupsFromLines(lines) {
 function collectDownloadGroups($, root) {
   const scoped = cloneRootWithoutSpoilers(root);
   const logicalLines = buildLogicalLines(scoped.$, scoped.root);
-  const section = extractDownloadSectionLines(logicalLines);
+  const section = extractDownloadSectionLines(logicalLines, buildLogicalLines($, root, { markSpoilers: true }));
 
   return {
     groups: collectDownloadGroupsFromLines(section.lines),
@@ -744,7 +829,10 @@ function parseThread(html, sourceUrl) {
     article = $(".bbWrapper").first();
   }
 
-  const opHtml = article.length ? article.html() || "" : "";
+  // Hidden decoy links must not reach the stored text, the link list or the change comparison.
+  article.find("*").filter((_, node) => isHiddenNode(node)).remove();
+
+  const opHtml = article.length ? stripLinkTokens(article.html() || "") : "";
   const opText = article.length ? String(article.text() || "") : "";
 
   if (!article.length) {
@@ -752,7 +840,10 @@ function parseThread(html, sourceUrl) {
   }
 
   const titleParts = parseThreadTitle(rawTitle);
-  const titleBranches = expandBranches(rawTitle);
+  // The version bracket says which chapter / season is current ("[S2 v1.45]"); the game's name is only asked when
+  // the bracket names none ("Bite: Season One [v1.05 S2 Ep. 1]" is on season 2).
+  const versionBranches = expandBranches(titleParts.currentVersion || "");
+  const titleBranches = versionBranches.length ? versionBranches : expandBranches(rawTitle, { extended: false });
   const logicalLines = buildLogicalLines($, article.length ? article : $.root());
 
   const developer = titleParts.developer || null;

@@ -106,7 +106,9 @@ function getDownloadJobForLink(gameId, link) {
   }) || null;
 }
 
-function isSupportedDirectDownload(url, label = "") {
+// Mirrors isSupportedDirectDownload in the main process. linkHost is the file host the thread names for the link;
+// forum links all point to f95zone.to/dl/... themselves.
+function isSupportedDirectDownload(url, label = "", linkHost = "") {
   const normalizedLabel = String(label || "").toLowerCase();
   if (
     normalizedLabel.includes("pixeldrain") ||
@@ -116,14 +118,15 @@ function isSupportedDirectDownload(url, label = "") {
     return true;
   }
 
+  const extraHosts = String(state.settings.extraDownloadHosts || "")
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, ""))
+    .filter(Boolean);
+  const supported = (host) => Boolean(host) && ["vik1ngfile.site", "vikingfile.com", "pixeldrain.com", ...extraHosts]
+    .some((entry) => host === entry || host.endsWith("." + entry));
+  if (supported(String(linkHost || "").toLowerCase())) return true;
   try {
-    const host = new URL(String(url || "").trim()).host.toLowerCase();
-    return (
-      host === "vik1ngfile.site" ||
-      host === "vikingfile.com" ||
-      host === "pixeldrain.com" ||
-      host === "www.pixeldrain.com"
-    );
+    return supported(new URL(String(url || "").trim()).host.toLowerCase());
   } catch {
     return false;
   }

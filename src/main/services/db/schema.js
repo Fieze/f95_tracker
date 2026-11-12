@@ -130,6 +130,7 @@ module.exports = {
     this.ensureColumn("download_links", "variant", "TEXT");
     this.ensureColumn("download_links", "platform", "TEXT");
     this.ensureColumn("download_links", "branch_version", "TEXT");
+    this.ensureColumn("download_links", "host", "TEXT");
     this.ensureColumn("archive_jobs", "branch", "TEXT");
     this.ensureColumn("game_folders", "preferred_exe_path", "TEXT");
     this.ensureColumn("game_folders", "sort_rank", "INTEGER");

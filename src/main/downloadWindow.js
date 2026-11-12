@@ -2,8 +2,12 @@ const path = require("path");
 const { BrowserWindow, session } = require("electron");
 const { isSafeBrowserUrl } = require("./services/browserSafety");
 const { ctx, DOWNLOAD_PARTITION, appIconPath } = require("./context");
+const { parsePixeldrainUrl, resolvePixeldrainDownload } = require("./services/pixeldrain");
 
-function isSupportedDirectDownload(candidateUrl, label = "") {
+const DIRECT_HOSTS = ["vik1ngfile.site", "vikingfile.com", "pixeldrain.com"];
+
+// `linkHost` is the file host the thread names for the link; forum links all point to f95zone.to/dl/... themselves.
+function isSupportedDirectDownload(candidateUrl, label = "", linkHost = "") {
   const normalizedLabel = String(label || "").toLowerCase();
   if (
     normalizedLabel.includes("pixeldrain") ||
@@ -13,15 +17,11 @@ function isSupportedDirectDownload(candidateUrl, label = "") {
     return true;
   }
 
+  const supported = (host) => Boolean(host) && [...DIRECT_HOSTS, ...getExtraDownloadHosts()]
+    .some((entry) => host === entry || host.endsWith("." + entry));
+  if (supported(String(linkHost || "").toLowerCase())) return true;
   try {
-    const host = new URL(String(candidateUrl || "").trim()).host.toLowerCase();
-    return (
-      host === "vik1ngfile.site" ||
-      host === "vikingfile.com" ||
-      host === "pixeldrain.com" ||
-      host === "www.pixeldrain.com" ||
-      getExtraDownloadHosts().some((extra) => host === extra || host.endsWith("." + extra))
-    );
+    return supported(new URL(String(candidateUrl || "").trim()).host.toLowerCase());
   } catch {
     return false;
   }
@@ -157,17 +157,58 @@ async function takeOverResolvedDownload(jobId, payload = {}) {
     payload.referrer ||
     (ctx.downloadWindow && !ctx.downloadWindow.isDestroyed() ? ctx.downloadWindow.webContents.getURL() : job.sourceUrl);
 
-  closeDownloadWindow();
+  // The window may belong to another job when this one was resolved without a window.
+  if (ctx.downloadWindowState?.jobId === Number(jobId)) closeDownloadWindow();
   return ctx.appService.startResolvedDownload(jobId, {
     url: resolvedUrl,
     fileName: payload.fileName || "",
     referrer,
-    cookieHeader
+    cookieHeader,
+    expectedSha256: payload.expectedSha256 || "",
+    expectedSize: payload.expectedSize || 0
   });
+}
+
+// Asks the Pixeldrain API for the file behind a Pixeldrain page and starts the download right away.
+// Returns false when the page itself is needed (captcha, rate limit, several files to choose from).
+async function startPixeldrainDownload(jobId, pageUrl) {
+  let file;
+  try {
+    file = await resolvePixeldrainDownload(pageUrl, { fetch: ctx.appService.downloadFetch });
+  } catch (error) {
+    await ctx.downloadLogger?.warn("Pixeldrain API could not start the download; the page is used instead.", {
+      jobId, pageUrl, code: error.code || "", message: error.message
+    });
+    if (!error.restricted) ctx.appService.updateDownloadJob(jobId, { errorMessage: error.message });
+    return false;
+  }
+  await ctx.downloadLogger?.info("Pixeldrain file resolved through the API.", { jobId, pageUrl, fileName: file.fileName, size: file.size });
+  void takeOverResolvedDownload(jobId, {
+    url: file.url,
+    fileName: file.fileName,
+    referrer: pageUrl,
+    expectedSha256: file.sha256,
+    expectedSize: file.size
+  }).catch((error) => {
+    ctx.downloadLogger?.error("Pixeldrain download failed.", { jobId, pageUrl, message: error.message });
+  });
+  return true;
+}
+
+// Called for every address the download window reaches. A Pixeldrain page is handed to the API once; the page keeps
+// loading meanwhile, so it is there for the user when the API cannot serve the file.
+function maybeTakeOverPixeldrain(jobId, candidateUrl) {
+  const state = ctx.downloadWindowState;
+  if (!state || state.jobId !== jobId || !parsePixeldrainUrl(candidateUrl)) return false;
+  if (state.pixeldrainTried.has(candidateUrl)) return true;
+  state.pixeldrainTried.add(candidateUrl);
+  void startPixeldrainDownload(jobId, candidateUrl);
+  return true;
 }
 
 function maybeTakeOverDownloadUrl(jobId, candidateUrl, extra = {}) {
   if (!ctx.appService.isProbableFileDownloadUrl(candidateUrl)) {
+    maybeTakeOverPixeldrain(jobId, candidateUrl);
     return false;
   }
 
@@ -217,9 +258,11 @@ function attachDownloadSessionListeners() {
   });
 }
 
-async function createDownloadWindow(payload) {
+async function createDownloadWindow(requested) {
+  // Forum links are signed per page load; an old one is swapped for the same link from a fresh load first.
+  const payload = await ctx.appService.freshDownloadPayload(requested);
   const targetUrl = String(payload?.url || "").trim();
-  if (!isSupportedDirectDownload(targetUrl, payload?.label || "")) {
+  if (!isSupportedDirectDownload(targetUrl, payload?.label || "", payload?.host || "")) {
     throw new Error("Direct in-app downloads are currently only supported for Vikingfile and Pixeldrain links.");
   }
 
@@ -230,6 +273,10 @@ async function createDownloadWindow(payload) {
   await ctx.appService.ensureDownloadReady();
 
   const job = ctx.appService.createDownloadJob(payload);
+  // A plain Pixeldrain address needs no window at all.
+  if (parsePixeldrainUrl(targetUrl) && await startPixeldrainDownload(job.id, targetUrl)) {
+    return ctx.appService.getDownloadJob(job.id);
+  }
   if (isDownloadWindowOpen()) {
     // One download window at a time: the new download waits for its turn instead of cancelling the running one.
     ctx.appService.updateDownloadJob(job.id, { status: "queued" });
@@ -274,7 +321,8 @@ async function openDownloadWindowForJob(job, payload) {
     jobId: job.id,
     webContentsId: ctx.downloadWindow.webContents.id,
     closing: false,
-    downloadStarted: false
+    downloadStarted: false,
+    pixeldrainTried: new Set()
   };
 
   ctx.downloadWindow.webContents.setWindowOpenHandler(({ url }) => {

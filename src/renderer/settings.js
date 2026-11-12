@@ -5,6 +5,11 @@ function setSettingsForm(settings) {
   form.installRoot.value = settings.installRoot || "";
   form.syncIntervalMinutes.value = settings.syncIntervalMinutes || 30;
   form.keepArchives.checked = Boolean(settings.keepArchives);
+  form.transferSaves.checked = settings.transferSaves !== false;
+  form.removeOldVersion.checked = settings.removeOldVersion !== false;
+  // Without the saves in the new version, removing the old one would lose them.
+  form.removeOldVersion.disabled = !form.transferSaves.checked;
+  form.transferSaves.onchange = () => { form.removeOldVersion.disabled = !form.transferSaves.checked; };
   form.extraDownloadHosts.value = settings.extraDownloadHosts || "";
 }
 
@@ -40,6 +45,8 @@ async function handleSettingsSubmit(event) {
       installRoot: form.installRoot.value.trim(),
       syncIntervalMinutes: Number(form.syncIntervalMinutes.value || 30),
       keepArchives: form.keepArchives.checked,
+      transferSaves: form.transferSaves.checked,
+      removeOldVersion: form.removeOldVersion.checked,
       extraDownloadHosts: form.extraDownloadHosts.value.trim()
     });
     $("#settings-status").textContent = "Saved";

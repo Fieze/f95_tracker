@@ -35,7 +35,9 @@ async function startBranchDownload(game, branch, variant) {
   if (!groups.length) throw new Error(`No download found for ${branch}.`);
   if (variant === "Split") throw new Error("Split archives are not supported by this app. Use \"Open page\" and download the parts yourself.");
   const group = groups[0];
-  const link = group.links.find((entry) => isSupportedDirectDownload(entry.url, entry.label));
+  // Pixeldrain first: it starts by itself through its API and the finished file is checked against its checksum.
+  const direct = group.links.filter((entry) => isSupportedDirectDownload(entry.url, entry.label, entry.host));
+  const link = direct.find((entry) => entry.host === "pixeldrain.com" || /pixeldrain/i.test(entry.label)) || direct[0];
   if (!link) {
     window.f95App.openLink(group.links[0].url);
     return "opened";
@@ -44,6 +46,7 @@ async function startBranchDownload(game, branch, variant) {
     gameId: game.id,
     linkId: link.id,
     url: link.url,
+    host: link.host || "",
     label: link.label,
     detectedVersion: group.branchVersion || game.branchLatest?.[branch] || game.currentVersion || "",
     branch,

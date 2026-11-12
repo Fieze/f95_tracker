@@ -23,3 +23,4 @@ require("./scraping.test");
 require("./existingFolder.test");
 require("./language.test");
 require("./extensionBridge.test");
+require("./updates.test");

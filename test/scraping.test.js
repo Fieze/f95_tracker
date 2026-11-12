@@ -193,7 +193,8 @@ test("user actions may show the browser check window, background refreshes never
   const game = await service.addThread(threadUrl);
   await service.refreshGame(game.id);
   await service.refreshAllGames();
-  assert.deepEqual(seen, [true, true, false]);
+  // Refreshing all games sends the quick version check first, then reads the thread; neither may show a window.
+  assert.deepEqual(seen, [true, true, false, false]);
 });
 
 const waitFor = async (predicate, label) => {
